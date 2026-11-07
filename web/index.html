@@ -8,7 +8,7 @@
   :root { --bg: #14101f; --ink: #f4e9d8; --sun: #ffc845; --moon: #a98bff; --dim: #8a7fa3; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
     touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; }
+  canvas { display: block; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
@@ -31,8 +31,8 @@ const g = canvas.getContext("2d");
 let W = 640, scale = 1, offY = 0;
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.round(innerWidth * dpr);
-  canvas.height = Math.round(innerHeight * dpr);
+  canvas.width = Math.round((canvas.clientWidth || innerWidth) * dpr);
+  canvas.height = Math.round((canvas.clientHeight || innerHeight) * dpr);
   // Fit 360 tall, and at least 400 wide (a phone held upright gets the game centred).
   scale = Math.min(canvas.height / H, canvas.width / 400);
   W = canvas.width / scale;
