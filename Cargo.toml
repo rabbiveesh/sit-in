@@ -1,0 +1,19 @@
+[package]
+name = "sit-in"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Sit In: an ear-training game where you play along with a live band (prototype)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The music engine (Nat Han Adventures' band), from crates.io: the core only, no audio backend.
+bandstand = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = "debuginfo"

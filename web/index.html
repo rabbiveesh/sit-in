@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Sit In</title>
+<style>
+  :root { --bg: #14101f; --ink: #f4e9d8; --sun: #ffc845; --moon: #a98bff; --dim: #8a7fa3; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
+    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+// Sit In: the page draws, listens for taps and keys, and plays the band's buffers. The band
+// (and the rules: which chord each question asks) live in the wasm (src/ffi.rs).
+const WASM_URL = "sit_in.wasm";
+const WASM_B64 = null; // the single-file build inlines the module here
+
+const H = 360;            // virtual height
+const PPB = 64;           // pixels per beat
+const RUNNER_X = 0.3;     // the runner's place across the screen
+const LANE = { up: 118, mid: 200, down: 282 };
+const CHUNK = 1024, LOOKAHEAD = 0.2;
+
+const canvas = document.getElementById("c");
+const g = canvas.getContext("2d");
+let W = 640, scale = 1, offY = 0;
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(innerWidth * dpr);
+  canvas.height = Math.round(innerHeight * dpr);
+  // Fit 360 tall, and at least 400 wide (a phone held upright gets the game centred).
+  scale = Math.min(canvas.height / H, canvas.width / 400);
+  W = canvas.width / scale;
+  offY = (canvas.height / scale - H) / 2;
+}
+addEventListener("resize", resize);
+resize();
+
+let x = null; // wasm exports
+async function loadWasm() {
+  let bytes;
+  if (WASM_B64) bytes = Uint8Array.from(atob(WASM_B64), (c) => c.charCodeAt(0));
+  else bytes = await (await fetch(WASM_URL)).arrayBuffer();
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  x = instance.exports;
+}
+const ready = loadWasm().catch((e) => { fatal = String(e); });
+let fatal = null;
+
+// ---- audio ----
+let ctx = null, sfx = [], nextTime = 0, t0 = 0, playing = false;
+function audioOn() {
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    for (let i = 0; i < 3; i++) {
+      const n = x.sfx_render(i), a = new Float32Array(x.memory.buffer, x.audio_ptr(), n * 2);
+      const b = ctx.createBuffer(2, n, x.sfx_rate());
+      const l = b.getChannelData(0), r = b.getChannelData(1);
+      for (let k = 0; k < n; k++) { l[k] = a[2 * k]; r[k] = a[2 * k + 1]; }
+      sfx.push(b);
+    }
+  }
+  if (ctx.state !== "running") ctx.resume();
+}
+function playSfx(i, gain = 0.8) {
+  if (!ctx) return;
+  const s = ctx.createBufferSource(), v = ctx.createGain();
+  s.buffer = sfx[i]; v.gain.value = gain;
+  s.connect(v).connect(ctx.destination); s.start();
+}
+function pump() {
+  if (!playing || !ctx) return;
+  const rate = x.engine_rate();
+  if (nextTime < ctx.currentTime) nextTime = ctx.currentTime + 0.02; // fell behind (tab hidden)
+  while (nextTime < ctx.currentTime + LOOKAHEAD) {
+    x.round_fill(CHUNK);
+    const a = new Float32Array(x.memory.buffer, x.audio_ptr(), CHUNK * 2);
+    const b = ctx.createBuffer(2, CHUNK, rate);
+    const l = b.getChannelData(0), r = b.getChannelData(1);
+    for (let k = 0; k < CHUNK; k++) { l[k] = a[2 * k]; r[k] = a[2 * k + 1]; }
+    const s = ctx.createBufferSource();
+    s.buffer = b; s.connect(ctx.destination); s.start(nextTime);
+    nextTime += CHUNK / rate;
+  }
+}
+setInterval(pump, 25);
+/** Seconds of the round heard so far. */
+function heard() {
+  if (!ctx || !playing) return 0;
+  const lat = ctx.outputLatency || ctx.baseLatency || 0;
+  return ctx.currentTime - t0 - lat;
+}
+
+// ---- the game ----
+const MODES = [
+  { title: "Major or minor?", up: "☀ MAJOR", down: "☾ MINOR", upIcon: "☀", downIcon: "☾",
+    rungs: ["Root position, C and G", "Any key", "Inversions", "No bass", "Faster", "Faster still"] },
+  { title: "ii-V or just V? (chords)", up: "ii-V-I", down: "V-I", upIcon: "ii", downIcon: "V",
+    rungs: ["Key of C", "Any key", "Faster", "Faster", "Up tempo", "Burning"] },
+  { title: "ii-V or just V? (solo)", up: "ii-V-I", down: "V-I", upIcon: "ii", downIcon: "V",
+    rungs: ["The band's lead, key of C", "Any key", "Bird, Sonny, Trane or Pops", "Faster", "Up tempo", "Burning"] },
+];
+let scene = "title", mode = 0, rungs = [0, 0, 0], seed = (Date.now() & 0xffff) + 1, blind = false;
+const rungName = () => MODES[mode].rungs[Math.min(rungs[mode], 5)] + "  ·  " + Math.round(round ? round.bpm : 0) + " bpm";
+let round = null; // {bpm, bars, qs: [{ask, door, major, name, choice, result}]}
+let ry = LANE.mid, flash = 0, bonk = 0;
+
+function startRound() {
+  audioOn();
+  x.round_new(seed++, mode, rungs[mode]);
+  const qs = [];
+  for (let q = 0; q < x.round_questions(); q++) {
+    const ask = x.round_ask_bar(q) * 4;
+    const n = x.round_name(q);
+    const name = new TextDecoder().decode(new Uint8Array(x.memory.buffer, x.text_ptr(), n));
+    qs.push({ ask, door: ask + 4, major: x.round_answer(q) === 1, name, choice: null, result: null });
+  }
+  round = { bpm: x.round_bpm(), bars: x.round_bars(), qs, right: 0 };
+  nextTime = t0 = ctx.currentTime + 0.12;
+  playing = true;
+  scene = "playing";
+  pump();
+}
+
+function beatNow() { return round ? heard() * round.bpm / 60 : 0; }
+
+/** The question open for an answer at `beat` (from its stabs until just past its door). */
+function openQuestion(beat) {
+  return round.qs.find((q) => q.result === null && beat >= q.ask - 0.5 && beat < q.door + 0.3);
+}
+
+function answer(up) {
+  if (scene === "title") return;
+  if (scene === "results") { if (performance.now() > resultsAt + 600) startRound(); return; }
+  const q = openQuestion(beatNow());
+  if (q) q.choice = up;
+}
+
+function update() {
+  if (scene !== "playing") return;
+  const beat = beatNow();
+  for (const q of round.qs) {
+    if (q.result === null && beat >= q.door + 0.3) {
+      q.result = q.choice === q.major;
+      if (q.result) { round.right++; playSfx(0); flash = 1; }
+      else { playSfx(1, 0.6); bonk = 1; }
+    }
+  }
+  if (beat >= round.bars * 4 - 1) {
+    playing = false;
+    scene = "results";
+    resultsAt = performance.now();
+    const n = round.qs.length, r = round.right;
+    round.verdict = r >= n - 1 ? "up" : r >= n - 3 ? "same" : "down";
+    rungs[mode] = Math.max(0, rungs[mode] + (round.verdict === "up" ? 1 : round.verdict === "down" ? -1 : 0));
+  }
+}
+let resultsAt = 0;
+const MENU_Y = 140, MENU_H = 62;
+
+/** Where the path for the lane `lane` (-1 up, 0 mid, 1 down) is at `beat`. */
+function pathY(beat, lane) {
+  const q = round && round.qs.find((q) => beat >= q.ask && beat < q.door + 4);
+  if (!q || lane === 0) return LANE.mid;
+  const to = lane < 0 ? LANE.up : LANE.down;
+  const s = beat - q.ask; // 0..8
+  const ease = (t) => t * t * (3 - 2 * t);
+  if (s < 2) return LANE.mid;
+  if (s < 3.6) return LANE.mid + (to - LANE.mid) * ease((s - 2) / 1.6);
+  if (s < 6) return to;
+  if (s < 7.6) return to + (LANE.mid - to) * ease((s - 6) / 1.6);
+  return LANE.mid;
+}
+
+// ---- drawing ----
+function text(s, px, X, Y, color = "#f4e9d8", align = "center") {
+  g.font = `bold ${px}px ui-monospace, Menlo, monospace`;
+  g.textAlign = align; g.textBaseline = "middle"; g.fillStyle = color;
+  g.fillText(s, X, Y);
+}
+function door(X, Y, kind, glow) {
+  // kind: null (closed), "sun" (up), "moon" (down)
+  const w = 30, h = 54;
+  g.fillStyle = kind === "sun" ? "#ffc845" : kind === "moon" ? "#a98bff" : "#7a5236";
+  g.fillRect(X - w / 2, Y - h, w, h);
+  g.strokeStyle = glow ? "#ffffff" : "#2a1d14"; g.lineWidth = glow ? 3 : 2;
+  g.strokeRect(X - w / 2, Y - h, w, h);
+  g.fillStyle = "#2a1d14"; g.fillRect(X + 7, Y - h / 2, 4, 4);
+  text(kind === "sun" ? MODES[mode].upIcon : kind === "moon" ? MODES[mode].downIcon : "?", kind && mode ? 14 : 18, X, Y - h / 2 - 8, kind ? "#2a1d14" : "#f4e9d8");
+}
+function runner(X, Y, beat) {
+  const hop = Math.abs(Math.sin(Math.PI * beat)) * 6;
+  const y = Y - 14 - hop;
+  g.fillStyle = bonk > 0 && Math.floor(bonk * 12) % 2 ? "#ff6b6b" : "#f4e9d8";
+  g.beginPath(); g.arc(X, y, 12, 0, Math.PI * 2); g.fill();
+  g.fillStyle = "#14101f"; g.fillRect(X + 3, y - 4, 3, 4); g.fillRect(X - 4, y - 4, 3, 4);
+  // headphones
+  g.strokeStyle = "#ff8a3d"; g.lineWidth = 3;
+  g.beginPath(); g.arc(X, y, 14, Math.PI * 1.1, Math.PI * 1.9); g.stroke();
+  g.fillStyle = "#ff8a3d"; g.fillRect(X - 16, y - 4, 5, 9); g.fillRect(X + 11, y - 4, 5, 9);
+}
+function lanes(camX, beat) {
+  g.lineWidth = 4; g.lineCap = "round";
+  const from = camX / PPB - 2, to = (camX + W) / PPB + 2;
+  for (const lane of [-1, 0, 1]) {
+    g.strokeStyle = lane < 0 ? "rgba(255,200,69,0.35)" : lane > 0 ? "rgba(169,139,255,0.35)" : "rgba(244,233,216,0.35)";
+    g.beginPath();
+    let first = true;
+    for (let b = from; b <= to; b += 0.1) {
+      const y = pathY(b, lane);
+      if (lane !== 0 && y === LANE.mid) { first = true; continue; }
+      const X = b * PPB - camX;
+      if (first) { g.moveTo(X, y); first = false; } else g.lineTo(X, y);
+    }
+    g.stroke();
+  }
+}
+
+function draw() {
+  const now = performance.now();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = "#14101f"; g.fillRect(0, 0, canvas.width, canvas.height);
+  g.setTransform(scale, 0, 0, scale, 0, offY * scale);
+  if (fatal) { text("couldn't load: " + fatal, 12, W / 2, H / 2); return; }
+
+  if (scene === "title") {
+    text("SIT IN", 36, W / 2, 50, "#ffc845");
+    text("an ear-training jam", 12, W / 2, 80, "#8a7fa3");
+    text("hear the band, pick the door before you reach it", 10, W / 2, 98, "#8a7fa3");
+    MODES.forEach((m, i) => {
+      const y = MENU_Y + i * MENU_H;
+      g.fillStyle = "rgba(244,233,216,0.07)"; g.fillRect(W / 2 - 192, y - MENU_H / 2 + 4, 384, MENU_H - 8);
+      text(`${i + 1}  ${m.title}`, 15, W / 2, y - 8, x ? "#f4e9d8" : "#8a7fa3");
+      text(`↑ ${m.up}   ↓ ${m.down}   ·  ${m.rungs[Math.min(rungs[i], 5)]}`, 10, W / 2, y + 12, "#8a7fa3");
+    });
+    text("↑ or tap the top half: the upper door", 10, W / 2, H - 46, "#8a7fa3");
+    text("↓ or tap the bottom half: the lower door", 10, W / 2, H - 30, "#8a7fa3");
+    text(blind ? "blindfold ON (B / tap here)" : "blindfold off (B / tap here)", 11, W - 8, 14, blind ? "#ffc845" : "#8a7fa3", "right");
+    return;
+  }
+
+  const beat = scene === "playing" ? beatNow() : round.bars * 4;
+  const camX = beat * PPB - W * RUNNER_X;
+
+  if (blind && scene === "playing") {
+    text("blindfold: listen", 16, W / 2, H / 2 - 12, "#8a7fa3");
+    text(`↑ ${MODES[mode].up}   ↓ ${MODES[mode].down}`, 14, W / 2, H / 2 + 16, "#8a7fa3");
+    text(`${round.right}`, 14, W - 10, 16, "#ffc845", "right");
+  } else {
+    // sky and cellar
+    g.fillStyle = "rgba(255,200,69,0.06)"; g.fillRect(0, 0, W, LANE.mid - 30);
+    g.fillStyle = "rgba(169,139,255,0.07)"; g.fillRect(0, LANE.mid + 30, W, H);
+    text("↑ " + MODES[mode].up, 12, 8, 14, "#ffc845", "left");
+    text("↓ " + MODES[mode].down, 12, 8, H - 14, "#a98bff", "left");
+    text(`${round.right} / ${round.qs.length}`, 14, W - 10, 16, "#ffc845", "right");
+    text(rungName(), 10, W - 10, 34, "#8a7fa3", "right");
+    // beat ticks on the floor
+    g.fillStyle = "rgba(244,233,216,0.15)";
+    for (let b = Math.floor(camX / PPB); b < (camX + W) / PPB; b++) {
+      g.fillRect(b * PPB - camX - 1, H - 6, 2, b % 4 === 0 ? 6 : 3);
+    }
+    lanes(camX, beat);
+    for (const q of round.qs) {
+      const X = q.door * PPB - camX;
+      if (X < -40 || X > W + 40) continue;
+      const shown = q.result !== null;
+      door(X, LANE.up, shown ? "sun" : null, shown && q.major);
+      door(X, LANE.down, shown ? "moon" : null, shown && !q.major);
+      if (shown) {
+        text(q.name, 13, X + 30, LANE.mid, q.result ? "#ffc845" : "#ff6b6b");
+      }
+    }
+    // the runner: along the lane chosen for the open question
+    const q = scene === "playing" && round.qs.find((q) => beat >= q.ask && beat < q.door + 4);
+    const lane = q && q.choice !== null ? (q.choice ? -1 : 1) : 0;
+    const target = pathY(beat, lane);
+    ry += (target - ry) * 0.25;
+    runner(W * RUNNER_X, ry, beat);
+    if (scene === "playing" && beat < 4) text(["4", "3", "2", "1"][Math.max(0, Math.min(3, Math.floor(beat)))], 28, W / 2, 60, "#8a7fa3");
+    if (flash > 0) { g.fillStyle = `rgba(255,200,69,${flash * 0.25})`; g.fillRect(0, 0, W, H); }
+    if (bonk > 0 && q) text("BONK", 14, W * RUNNER_X, ry - 44, "#ff6b6b");
+  }
+  flash = Math.max(0, flash - 0.05); bonk = Math.max(0, bonk - 0.03);
+
+  if (scene === "results") {
+    g.fillStyle = "rgba(20,16,31,0.88)"; g.fillRect(0, 0, W, H);
+    text(`${round.right} / ${round.qs.length}`, 40, W / 2, 110, "#ffc845");
+    const next = MODES[mode].rungs[Math.min(rungs[mode], 5)];
+    const v = { up: "Nice! Next tune: " + next, same: "Again, same level", down: "Back a step: " + next }[round.verdict];
+    text(v, 14, W / 2, 160);
+    const missed = round.qs.filter((q) => !q.result).map((q) => q.name);
+    if (missed.length) text("missed: " + missed.slice(0, 4).join(", "), 11, W / 2, 196, "#8a7fa3");
+    text("tap for the next tune", 14, W / 2, 250, Math.floor(now / 500) % 2 ? "#f4e9d8" : "#8a7fa3");
+    text("M / tap here: menu", 11, W / 2, 300, "#8a7fa3");
+  }
+}
+
+function frame() { update(); draw(); requestAnimationFrame(frame); }
+ready.then(() => requestAnimationFrame(frame));
+requestAnimationFrame(draw);
+
+// ---- input ----
+addEventListener("keydown", (e) => {
+  if (e.repeat || !x) return;
+  const k = e.key.toLowerCase();
+  if (k === "b") { blind = !blind; return; }
+  if (scene === "title" && "123".includes(k)) { mode = +k - 1; startRound(); return; }
+  if (k === "m" || k === "escape") { playing = false; scene = "title"; return; }
+  if (k === "arrowup" || k === "w") answer(true);
+  else if (k === "arrowdown" || k === "s") answer(false);
+  else if (k === " " || k === "enter") { if (scene !== "playing") answer(true); }
+  else return;
+  e.preventDefault();
+});
+canvas.addEventListener("pointerdown", (e) => {
+  if (!x) return;
+  const r = canvas.getBoundingClientRect();
+  const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+  const vy = fy * canvas.height / scale - offY; // virtual y
+  if (scene === "title") {
+    if (fx > 0.6 && vy < 40) { blind = !blind; return; }
+    const i = Math.floor((vy - MENU_Y + MENU_H / 2) / MENU_H);
+    if (i >= 0 && i < MODES.length) { mode = i; startRound(); }
+    return;
+  }
+  if (scene === "results" && vy > 280) { scene = "title"; return; }
+  answer(fy < 0.5);
+});
+</script>
+</body>
+</html>
