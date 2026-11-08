@@ -135,6 +135,10 @@ const MODES = [
     rungs: ["vi or VI7, key of C", "+ #i°, any key", "+ iii VI7", "+ tritone sub", "+ bIII7 bII7", "+ Tadd Dameron"] },
   { title: "Turnarounds (solo)", up: "upper door", down: "lower door", labels: true,
     rungs: ["vi or VI7, key of C", "+ #i°, any key", "+ iii VI7", "+ tritone sub", "+ bIII7 bII7", "+ Tadd Dameron"] },
+  { title: "Major or minor ii-V-I (chords)", up: "MAJOR ii-V-I", down: "MINOR iiø-V7b9-i", upIcon: "☀", downIcon: "☾",
+    rungs: ["Key of C", "Any key", "Faster", "Faster", "Up tempo", "Burning"] },
+  { title: "Major or minor ii-V-I (solo)", up: "MAJOR ii-V-I", down: "MINOR iiø-V7b9-i", upIcon: "☀", downIcon: "☾",
+    rungs: ["The band's lead, key of C", "Any key", "Bird, any key", "Faster", "Up tempo", "Burning"] },
 ];
 // Per mode: the ladder step, and the band's tempo in percent of the step's (it slows after a
 // rough tune). Remembered in this browser.
@@ -211,7 +215,7 @@ function update() {
   }
 }
 let resultsAt = 0;
-const MENU_Y = 116, MENU_H = 44;
+const MENU_Y = 100, MENU_H = 34;
 /** The question whose fork is around `beat` (from a bar before its door to a bar after). */
 const forkAt = (beat) => round && round.qs.find((q) => beat >= q.door - 4 && beat < q.door + 4);
 
@@ -287,15 +291,15 @@ function draw() {
   if (fatal) { text("couldn't load: " + fatal, 12, W / 2, H / 2); return; }
 
   if (scene === "title") {
-    text("SIT IN", 32, W / 2, 36, "#ffc845");
-    text("hear the band, pick the door before you reach it", 10, W / 2, 66, "#8a7fa3");
-    text("each tune opens with a free listen", 10, W / 2, 80, "#8a7fa3");
+    text("SIT IN", 28, W / 2, 28, "#ffc845");
+    text("hear the band, pick the door before you reach it", 10, W / 2, 54, "#8a7fa3");
+    text("each tune opens with a free listen", 10, W / 2, 68, "#8a7fa3");
     MODES.forEach((m, i) => {
       const y = MENU_Y + i * MENU_H;
       g.fillStyle = "rgba(244,233,216,0.07)"; g.fillRect(W / 2 - 192, y - MENU_H / 2 + 3, 384, MENU_H - 6);
-      text(`${i + 1}  ${m.title}`, 13, W / 2, y - 7, x ? "#f4e9d8" : "#8a7fa3");
+      text(`${i + 1}  ${m.title}`, 12, W / 2, y - 6, x ? "#f4e9d8" : "#8a7fa3");
       const slow = tempo[i] < 100 ? `  ·  slowed to ${tempo[i]}%` : "";
-      text((m.labels ? "" : `↑ ${m.up}  ↓ ${m.down}  ·  `) + m.rungs[Math.min(rungs[i], 5)] + slow, 9, W / 2, y + 9, "#8a7fa3");
+      text((m.labels ? "" : `↑ ${m.up}  ↓ ${m.down}  ·  `) + m.rungs[Math.min(rungs[i], 5)] + slow, 8.5, W / 2, y + 8, "#8a7fa3");
     });
     text("↑ or tap the top half: the upper door.  ↓ or the bottom half: the lower", 9, W / 2, H - 14, "#8a7fa3");
     text(blind ? "blindfold ON (B / tap here)" : "blindfold off (B / tap here)", 11, W - 8, 14, blind ? "#ffc845" : "#8a7fa3", "right");
@@ -379,7 +383,7 @@ addEventListener("keydown", (e) => {
   if (e.repeat || !x || document.getElementById("play")) return;
   const k = e.key.toLowerCase();
   if (k === "b") { blind = !blind; return; }
-  if (scene === "title" && "12345".includes(k)) { mode = +k - 1; startRound(); return; }
+  if (scene === "title" && "1234567".includes(k)) { mode = +k - 1; startRound(); return; }
   if (k === "m" || k === "escape") { playing = false; scene = "title"; return; }
   if (k === "arrowup" || k === "w") answer(true);
   else if (k === "arrowdown" || k === "s") answer(false);

@@ -13,6 +13,12 @@ pub enum Q {
     M7,
     Dom7,
     Dim7,
+    /// Half-diminished (m7b5), the minor ii.
+    HalfDim,
+    /// The minor V: a dominant with a flat 9 (its root left out of the voicing's top four).
+    Dom7b9,
+    /// The minor tonic.
+    Min6,
 }
 
 impl Q {
@@ -22,6 +28,9 @@ impl Q {
             Q::M7 => [0, 3, 7, 10],
             Q::Dom7 => [0, 4, 7, 10],
             Q::Dim7 => [0, 3, 6, 9],
+            Q::HalfDim => [0, 3, 6, 10],
+            Q::Dom7b9 => [4, 7, 10, 13],
+            Q::Min6 => [0, 3, 7, 9],
         }
     }
 
@@ -31,6 +40,9 @@ impl Q {
             Q::M7 => "m7",
             Q::Dom7 => "7",
             Q::Dim7 => "dim7",
+            Q::HalfDim => "m7b5",
+            Q::Dom7b9 => "7b9",
+            Q::Min6 => "m6",
         }
     }
 }

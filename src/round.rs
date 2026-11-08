@@ -26,6 +26,8 @@ pub enum Mode {
     /// Which turnaround back to the I: the doors name two flavors, the band plays one.
     /// Chords or (`solo`) the soloist alone, as for the ii-V.
     Turnaround { solo: bool },
+    /// Major ii-V-I (up) or minor (down), in the chords or the solo.
+    MinorTwoFive { solo: bool },
 }
 
 impl Mode {
@@ -35,6 +37,8 @@ impl Mode {
             2 => Mode::TwoFive { solo: true },
             3 => Mode::Turnaround { solo: false },
             4 => Mode::Turnaround { solo: true },
+            5 => Mode::MinorTwoFive { solo: false },
+            6 => Mode::MinorTwoFive { solo: true },
             _ => Mode::MajorMinor,
         }
     }
@@ -81,6 +85,10 @@ impl Rung {
             Mode::TwoFive { solo } => {
                 let start = if solo { 132.0 } else { 116.0 };
                 Rung { bpm: (start + 16.0 * n as f32).min(232.0), any_root: n >= 1, inversions: false, bass: !solo, players: n >= 2, step: n }
+            }
+            Mode::MinorTwoFive { solo } => {
+                let start = if solo { 120.0 } else { 104.0 };
+                Rung { bpm: (start + 14.0 * n as f32).min(220.0), any_root: n >= 1, inversions: false, bass: !solo || n < 1, players: solo && n >= 2, step: n }
             }
             // Each step adds a flavor (`turnaround::pool`), so the tempo climbs slowly.
             Mode::Turnaround { solo } => {
@@ -205,6 +213,7 @@ impl Round {
             Mode::MajorMinor => Round::major_minor(seed, rung),
             Mode::TwoFive { solo } => Round::two_five(seed, rung, solo),
             Mode::Turnaround { solo } => Round::turnarounds(seed, rung, solo),
+            Mode::MinorTwoFive { solo } => Round::major_minor_two_five(seed, rung, solo),
         }
     }
 
@@ -312,63 +321,46 @@ impl Round {
         let listen: Vec<usize> = if pool <= 4 { (0..pool).collect() } else { vec![pool - 2, pool - 1] };
         let demos = listen.len();
         picks.splice(0..0, listen.iter().map(|&f| (f, if f == 0 { 1 } else { 0 }, true)));
-        // The tune: a count-in, then | I x | y V | I | per question, and a bar to end on.
-        let played: Vec<_> = picks.iter().map(|&(u, d, up)| FLAVORS[if up { u } else { d }]).collect();
-        let (mut lead, mut comp, mut bass, mut drums) = (String::from("v11 @2 r1 "), String::from("v8 @1 r1 "), String::from("r1 "), String::from("v8 H4 h4 h4 h4 "));
-        let mut chart = format!("| {} ", turnaround::token(turnaround::Ch(0, turnaround::Q::Maj7), tonic));
         let home = turnaround::Ch(0, turnaround::Q::Maj7);
-        for f in &played {
-            lead.push_str("r1 r1 r1 ");
-            for (k, c) in f.chords.iter().enumerate() {
-                if solo {
-                    comp.push_str("r2 ");
-                    bass.push_str("r2 ");
-                } else {
-                    comp.push_str(&format!("{} ", chord(&turnaround::voicing(*c, tonic), "2")));
-                    bass.push_str(&format!("{}4 {}4 ", note(turnaround::bass(*c, tonic)), note(turnaround::bass(*c, tonic) + 7)));
-                }
-                if k % 2 == 0 {
-                    chart.push_str(&format!("| {} ", turnaround::token(*c, tonic)));
-                } else {
-                    chart.push_str(&format!("{} ", turnaround::token(*c, tonic)));
-                }
-            }
-            if solo || !rung.bass {
-                comp.push_str(&if solo { "r1 ".to_string() } else { format!("{} ", chord(&turnaround::voicing(home, tonic), "1")) });
-                bass.push_str("r1 ");
-            } else {
-                comp.push_str(&format!("{} ", chord(&turnaround::voicing(home, tonic), "1")));
-                bass.push_str(&format!("{}1 ", note(turnaround::bass(home, tonic))));
-            }
-            drums.push_str("k4 h4 s4 h4 k4 h4 s4 h8 h8 k4 h4 s4 h4 ");
-            chart.push_str(&format!("| {} ", turnaround::token(home, tonic)));
-        }
-        lead.push_str("r1");
-        comp.push_str("r1");
-        bass.push_str("r1");
-        drums.push_str("x2 r2");
-        chart.push_str(&format!("| {} |", turnaround::token(home, tonic)));
-        let song = SongFile::from_mml("Sit In: turnarounds", rung.bpm, 0.5, false, tonic, &chart, [&lead, &comp, &bass, &drums])?;
-        let config = EngineConfig { seed, intro: false, soloist: solo.then_some(if rung.players { Soloist::Bird } else { Soloist::Band }), ..EngineConfig::on_grid() };
-        let mut engine = Engine::with_config(&song, RATE, config)?;
-        if solo {
-            engine.post(Input::ForceChorus(Some(Call { chorus: Chorus::Blowing, key_up: false })));
-            engine.post(Input::SetFreedom { lead: 0.7, comp: 0.0, bass: 0.0, drums: 0.2, dynamics: 0.4 });
-            engine.post(Input::SetMix([1.0, 0.0, 0.0, 1.0]));
-        } else {
-            engine.post(Input::SetFreedom { lead: 0.0, comp: 0.0, bass: 0.0, drums: 0.15, dynamics: 0.2 });
-        }
-        let questions = picks
+        let progs = picks
             .iter()
             .enumerate()
-            .map(|(q, &(u, d, up))| {
-                let ask = COUNT_IN + q as u32 * 3;
-                let f = FLAVORS[if up { u } else { d }];
-                let name = f.chords.iter().map(|c| turnaround::token(*c, tonic)).collect::<Vec<_>>().join(" ");
-                Question { up, name, ask, door: ask + 2, labels: Some([FLAVORS[u].label.to_string(), FLAVORS[d].label.to_string()]), demo: q < demos }
+            .map(|(q, &(u, d, up))| Prog {
+                chords: FLAVORS[if up { u } else { d }].chords.to_vec(),
+                home,
+                up,
+                labels: Some([FLAVORS[u].label.to_string(), FLAVORS[d].label.to_string()]),
+                demo: q < demos,
             })
             .collect();
-        Ok(Round { mode: Mode::Turnaround { solo }, rung, questions, song, engine })
+        changes_round(seed, rung, Mode::Turnaround { solo }, solo, tonic, progs)
+    }
+
+    /// Major or minor ii-V-I: Dm7 G7 | Cmaj7 (up) or Dm7b5 G7b9 | Cm6 (down). One key a
+    /// round from the second step.
+    fn major_minor_two_five(seed: u64, rung: Rung, solo: bool) -> Result<Round, String> {
+        use turnaround::{Ch, Q};
+        let mut dice = Dice(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let tonic = if rung.any_root { dice.below(12) as u8 } else { 0 };
+        let mut answers = vec![true, false]; // the free listen
+        while answers.len() < 2 + QUESTIONS {
+            let up = dice.below(2) == 0;
+            if fits(&answers[2..], up) {
+                answers.push(up);
+            }
+        }
+        let progs = answers
+            .iter()
+            .enumerate()
+            .map(|(q, &up)| Prog {
+                chords: if up { vec![Ch(2, Q::M7), Ch(7, Q::Dom7)] } else { vec![Ch(2, Q::HalfDim), Ch(7, Q::Dom7b9)] },
+                home: if up { Ch(0, Q::Maj7) } else { Ch(0, Q::Min6) },
+                up,
+                labels: None,
+                demo: q < 2,
+            })
+            .collect();
+        changes_round(seed, rung, Mode::MinorTwoFive { solo }, solo, tonic, progs)
     }
 }
 
@@ -421,6 +413,74 @@ fn write_two_fives(answers: &[bool], tonic: u8, rung: Rung, solo: bool) -> Resul
     drums.push_str("x2 r2");
     chart.push_str(&format!("| {i} |"));
     SongFile::from_mml("Sit In: ii-V or V", rung.bpm, 0.5, false, t % 12, &chart, [&lead, &comp, &bass, &drums])
+}
+
+/// One question of changes: chords two to a bar, then the chord they land on (the door).
+struct Prog {
+    chords: Vec<turnaround::Ch>,
+    home: turnaround::Ch,
+    up: bool,
+    labels: Option<[String; 2]>,
+    demo: bool,
+}
+
+/// A round of changes in the key of `tonic` (a pitch class): a count-in, each question's
+/// chords and its landing bar, and a bar to end on. In the chords the comp and bass play them;
+/// in the solo only the chart is written and the soloist plays the changes alone.
+fn changes_round(seed: u64, rung: Rung, mode: Mode, solo: bool, tonic: u8, progs: Vec<Prog>) -> Result<Round, String> {
+    use turnaround::{bass as low, token, voicing};
+    let (mut lead, mut comp, mut bass, mut drums) = (String::from("v11 @2 r1 "), String::from("v8 @1 r1 "), String::from("r1 "), String::from("v8 H4 h4 h4 h4 "));
+    let mut chart = format!("| {} ", token(progs[0].home, tonic));
+    let mut questions = Vec::with_capacity(progs.len());
+    let mut bar = COUNT_IN;
+    for (q, p) in progs.iter().enumerate() {
+        let bars = p.chords.len().div_ceil(2) as u32;
+        for (k, c) in p.chords.iter().enumerate() {
+            if solo {
+                comp.push_str("r2 ");
+                bass.push_str("r2 ");
+            } else {
+                comp.push_str(&format!("{} ", chord(&voicing(*c, tonic), "2")));
+                bass.push_str(&format!("{}4 {}4 ", note(low(*c, tonic)), note(low(*c, tonic) + 7)));
+            }
+            chart.push_str(&format!("{}{} ", if k % 2 == 0 { "| " } else { "" }, token(*c, tonic)));
+        }
+        if solo {
+            comp.push_str("r1 ");
+            bass.push_str("r1 ");
+        } else {
+            comp.push_str(&format!("{} ", chord(&voicing(p.home, tonic), "1")));
+            bass.push_str(&if rung.bass { format!("{}1 ", note(low(p.home, tonic))) } else { "r1 ".to_string() });
+        }
+        for _ in 0..bars + 1 {
+            lead.push_str("r1 ");
+        }
+        for _ in 0..bars {
+            drums.push_str("k4 h4 s4 h8 h8 ");
+        }
+        drums.push_str("k4 h4 s4 h4 ");
+        chart.push_str(&format!("| {} ", token(p.home, tonic)));
+        let name = p.chords.iter().map(|c| token(*c, tonic)).collect::<Vec<_>>().join(" ") + " | " + &token(p.home, tonic);
+        questions.push(Question { up: p.up, name, ask: bar, door: bar + bars, labels: p.labels.clone(), demo: p.demo });
+        let _ = q;
+        bar += bars + 1;
+    }
+    lead.push_str("r1");
+    comp.push_str("r1");
+    bass.push_str("r1");
+    drums.push_str("x2 r2");
+    chart.push_str(&format!("| {} |", token(progs[progs.len() - 1].home, tonic)));
+    let song = SongFile::from_mml("Sit In: changes", rung.bpm, 0.5, false, tonic, &chart, [&lead, &comp, &bass, &drums])?;
+    let config = EngineConfig { seed, intro: false, soloist: solo.then_some(if rung.players { Soloist::Bird } else { Soloist::Band }), ..EngineConfig::on_grid() };
+    let mut engine = Engine::with_config(&song, RATE, config)?;
+    if solo {
+        engine.post(Input::ForceChorus(Some(Call { chorus: Chorus::Blowing, key_up: false })));
+        engine.post(Input::SetFreedom { lead: 0.7, comp: 0.0, bass: 0.0, drums: 0.2, dynamics: 0.4 });
+        engine.post(Input::SetMix([1.0, 0.0, 0.0, 1.0]));
+    } else {
+        engine.post(Input::SetFreedom { lead: 0.0, comp: 0.0, bass: 0.0, drums: 0.15, dynamics: 0.2 });
+    }
+    Ok(Round { mode, rung, questions, song, engine })
 }
 
 /// MML for one MIDI note (with its octave).
@@ -503,7 +563,7 @@ mod tests {
 
     #[test]
     fn every_rung_writes_a_round_that_plays() {
-        for (mode, n) in [0, 1, 2, 3, 4].into_iter().flat_map(|m| (0..6).map(move |n| (Mode::from_index(m), n))) {
+        for (mode, n) in [0, 1, 2, 3, 4, 5, 6].into_iter().flat_map(|m| (0..6).map(move |n| (Mode::from_index(m), n))) {
             let mut round = Round::new(n as u64 + 1, mode, Rung::for_mode(mode, n)).unwrap();
             let real: Vec<&Question> = round.questions.iter().filter(|q| !q.demo).collect();
             assert_eq!(real.len(), QUESTIONS);
@@ -658,5 +718,48 @@ mod turnaround_tests {
         }
         eprintln!("chord tones at the changes {hit}/{total}");
         assert!(total >= 60 && hit * 10 >= total * 7, "{hit}/{total}");
+    }
+}
+
+#[cfg(test)]
+mod minor_tests {
+    use super::*;
+    use crate::turnaround::{Ch, Q};
+    use bandstand::Frame;
+    use std::collections::BTreeMap;
+
+    /// The band's lead, alone, plays the minor ii-V-I's own tones (the b5 of the ii, the b9 of
+    /// the V, the minor tonic) where it lands on a change.
+    #[test]
+    fn the_soloist_spells_minor_two_fives() {
+        let (mut hit, mut total) = (0u32, 0u32);
+        for seed in 1..=4u64 {
+            let mode = Mode::MinorTwoFive { solo: true };
+            let mut round = Round::new(seed, mode, Rung::for_mode(mode, 1)).unwrap();
+            let tonic = round.song.key;
+            let spb = RATE as f64 * 60.0 / round.rung.bpm as f64;
+            let mut lead: BTreeMap<u64, u8> = BTreeMap::new();
+            let mut buf = vec![Frame::ZERO; 512];
+            while !round.engine.finished() && round.engine.beat_clock().position.bar < round.bars() as u64 {
+                round.engine.fill(&mut buf);
+                for e in round.engine.pending_events() {
+                    if let (0, bandstand::live::voice::Sound::Note(n)) = (e.ch, &e.sound) {
+                        lead.insert(e.start, *n);
+                    }
+                }
+            }
+            for q in round.questions.iter().filter(|q| !q.up) {
+                for (k, c) in [Ch(2, Q::HalfDim), Ch(7, Q::Dom7b9), Ch(0, Q::Min6)].iter().enumerate() {
+                    let at = (q.ask as f64 * 4.0 + 2.0 * k as f64) * spb;
+                    let Some((_, &n)) = lead.range((at - 0.5 * spb) as u64..(at + 0.25 * spb) as u64).last() else { continue };
+                    let mut tones = turnaround::voicing(*c, tonic).map(|t| t % 12).to_vec();
+                    tones.push((tonic + c.0) % 12);
+                    total += 1;
+                    hit += tones.contains(&(n % 12)) as u32;
+                }
+            }
+        }
+        eprintln!("minor chord tones at the changes {hit}/{total}");
+        assert!(total >= 25 && hit * 10 >= total * 7, "{hit}/{total}");
     }
 }
