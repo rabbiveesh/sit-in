@@ -5,14 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>Sit In</title>
 <style>
-  :root { --bg: #14101f; --ink: #f4e9d8; --sun: #ffc845; --moon: #a98bff; --dim: #8a7fa3; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
+  /* One dark club look. The game sits in a box of its own size (not the window's): a page
+     viewer may size its frame to the content, so nothing here leans on 100vh. */
+  :root { color-scheme: dark; --bg: #14101f; --ink: #f4e9d8; --sun: #ffc845; --moon: #a98bff; --dim: #8a7fa3; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 ui-monospace, Menlo, monospace;
+    padding-block: 12px; padding-left: max(12px, env(safe-area-inset-left, 0px)); padding-right: max(12px, env(safe-area-inset-right, 0px)); }
+  [hidden] { display: none !important; }
+  .screen { position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: 92vh; margin: 0 auto;
     touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  canvas { display: block; width: 100%; height: 100%; }
+  @media (max-aspect-ratio: 1/1) { .screen { aspect-ratio: 3 / 4; } }
+  .screen canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+  .play, .status { position: absolute; inset: 0; display: grid; place-content: center; gap: 10px; text-align: center;
+    background: var(--bg); color: var(--sun); border: 0; font: bold 22px/1.4 ui-monospace, Menlo, monospace; padding: 16px; }
+  .play { cursor: pointer; }
+  .play small, .status small { display: block; font-size: 13px; font-weight: normal; color: var(--dim); }
+  .play:focus-visible { outline: 3px solid var(--sun); outline-offset: -6px; }
+  .status { pointer-events: none; font-size: 15px; }
 </style>
 </head>
 <body>
-<canvas id="c"></canvas>
+<div class="screen" id="screen">
+  <canvas id="c" tabindex="0"></canvas>
+  <button class="play" id="play" type="button">SIT IN<small>tap to start · sound on</small></button>
+  <div class="status" id="status" hidden></div>
+</div>
 <script>
 "use strict";
 // Sit In: the page draws, listens for taps and keys, and plays the band's buffers. The band
@@ -41,6 +57,17 @@ function resize() {
 addEventListener("resize", resize);
 resize();
 
+// Errors show on the screen: a phone or an app viewer has no console.
+const statusEl = document.getElementById("status");
+function showError(e) {
+  statusEl.hidden = false;
+  statusEl.innerHTML = "THE BAND DIDN'T START<small></small>";
+  statusEl.querySelector("small").textContent = String((e && e.message) || e);
+}
+addEventListener("error", (e) => showError(e.error || e.message));
+addEventListener("unhandledrejection", (e) => showError(e.reason));
+new ResizeObserver(resize).observe(canvas);
+
 let x = null; // wasm exports
 async function loadWasm() {
   let bytes;
@@ -49,7 +76,7 @@ async function loadWasm() {
   const { instance } = await WebAssembly.instantiate(bytes, {});
   x = instance.exports;
 }
-const ready = loadWasm().catch((e) => { fatal = String(e); });
+const ready = loadWasm().catch((e) => { fatal = String(e); showError(e); });
 let fatal = null;
 
 // ---- audio ----
@@ -305,8 +332,15 @@ ready.then(() => requestAnimationFrame(frame));
 requestAnimationFrame(draw);
 
 // ---- input ----
+// One tap starts it all: the audio is allowed from a gesture, and the canvas takes the keys.
+document.getElementById("play").addEventListener("click", async (e) => {
+  e.currentTarget.remove();
+  canvas.focus();
+  try { await ready; if (x) audioOn(); } catch (err) { showError(err); }
+});
+canvas.addEventListener("pointerdown", () => canvas.focus());
 addEventListener("keydown", (e) => {
-  if (e.repeat || !x) return;
+  if (e.repeat || !x || document.getElementById("play")) return;
   const k = e.key.toLowerCase();
   if (k === "b") { blind = !blind; return; }
   if (scene === "title" && "123".includes(k)) { mode = +k - 1; startRound(); return; }
