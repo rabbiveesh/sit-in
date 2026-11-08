@@ -18,7 +18,13 @@ the door before your runner reaches it.
    soloist's line tells you. First the band's own lead (a chord tone on nearly every
    downbeat), then Bird, Sonny, Trane or Pops (bandstand's profiles), who say it less plainly.
 
-Eight questions a tune; 7 or 8 right moves you up a level, 4 or fewer down one. **B** (or
+4. **Turnarounds (chords / solo)**: the doors name two turnarounds back to the I, the band
+   plays one. Each level adds a flavor: I vi ii V and I VI7 ii V, then I #i° ii V, iii VI7
+   ii V, the tritone sub I VI7 ii bII7, I bIII7 ii bII7, and Tadd Dameron's I bIII bVI bII.
+
+Every tune opens with a free listen: the band plays each answer once, its door shown, no
+score. Eight questions a tune; 7 or 8 right moves you up (after bringing a slowed band back
+to tempo), 4 or fewer slows the band down 15% (to 64%), and only then drops a level. **B** (or
 the corner on the title) puts the blindfold on: the screen goes dark and only the sounds
 tell you how you did.
 

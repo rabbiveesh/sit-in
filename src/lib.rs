@@ -11,5 +11,6 @@
 
 pub mod ffi;
 pub mod round;
+pub mod turnaround;
 
 pub use round::{Mode, Quality, Question, Round, Rung};

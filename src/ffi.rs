@@ -21,11 +21,11 @@ fn with<T>(f: impl FnOnce(&mut Round) -> T, or: T) -> T {
 }
 
 /// Start a round of `mode` (0 major or minor, 1 ii-V or V in the chords, 2 the same in the
-/// solo) on step `rung` of its ladder. Returns 1 on success.
+/// solo, 3 turnarounds in the chords, 4 in the solo) on step `rung` of its ladder, at `tempo` percent of its tempo. Returns 1 on success.
 #[unsafe(no_mangle)]
-pub extern "C" fn round_new(seed: u32, mode: u32, rung: u32) -> u32 {
+pub extern "C" fn round_new(seed: u32, mode: u32, rung: u32, tempo: u32) -> u32 {
     let mode = Mode::from_index(mode);
-    match Round::new(seed as u64, mode, Rung::for_mode(mode, rung)) {
+    match Round::new(seed as u64, mode, Rung::for_mode(mode, rung).at_tempo(tempo)) {
         Ok(r) => {
             ROUND.set(Some(r));
             1
@@ -52,7 +52,30 @@ pub extern "C" fn round_questions() -> u32 {
 /// The bar question `q` asks in.
 #[unsafe(no_mangle)]
 pub extern "C" fn round_ask_bar(q: u32) -> u32 {
-    Round::ask_bar(q as usize)
+    with(|r| r.questions.get(q as usize).map_or(0, |q| q.ask), 0)
+}
+
+/// 1 if question `q` is a free listen (the tune opens with them: the door shown, no score).
+#[unsafe(no_mangle)]
+pub extern "C" fn round_demo(q: u32) -> u32 {
+    with(|r| r.questions.get(q as usize).map_or(0, |q| q.demo as u32), 0)
+}
+
+/// The bar question `q`'s door is at.
+#[unsafe(no_mangle)]
+pub extern "C" fn round_door_bar(q: u32) -> u32 {
+    with(|r| r.questions.get(q as usize).map_or(0, |q| q.door), 0)
+}
+
+/// What question `q`'s upper (`up` 1) or lower door says, as UTF-8 at [`text_ptr`]; returns
+/// its length (0: the mode's fixed doors).
+#[unsafe(no_mangle)]
+pub extern "C" fn round_label(q: u32, up: u32) -> u32 {
+    let label = with(|r| r.questions.get(q as usize).and_then(|q| q.labels.clone()).map(|l| l[(up == 0) as usize].clone()).unwrap_or_default(), String::new());
+    TEXT.with_borrow_mut(|t| {
+        *t = label;
+        t.len() as u32
+    })
 }
 
 /// Question `q`'s answer: 1 up (major; ii-V), 0 down (minor; just V).
