@@ -21,7 +21,8 @@ fn with<T>(f: impl FnOnce(&mut Round) -> T, or: T) -> T {
 }
 
 /// Start a round of `mode` (0 major or minor, 1 ii-V or V in the chords, 2 the same in the
-/// solo, 3 turnarounds in the chords, 4 in the solo) on step `rung` of its ladder, at `tempo` percent of its tempo. Returns 1 on success.
+/// solo, 3 turnarounds in the chords, 4 in the solo, 5 major or minor ii-V-I in the chords, 6 in
+/// the solo, 7 which voicing, 8 a real tune) on step `rung` of its ladder, at `tempo` percent of its tempo. Returns 1 on success.
 #[unsafe(no_mangle)]
 pub extern "C" fn round_new(seed: u32, mode: u32, rung: u32, tempo: u32) -> u32 {
     let mode = Mode::from_index(mode);
@@ -36,12 +37,13 @@ pub extern "C" fn round_new(seed: u32, mode: u32, rung: u32, tempo: u32) -> u32 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn round_bpm() -> f32 {
-    with(|r| r.rung.bpm, 0.0)
+    with(|r| r.song.bpm, 0.0)
 }
 
+/// Where the tune ends, in beats.
 #[unsafe(no_mangle)]
-pub extern "C" fn round_bars() -> u32 {
-    with(|r| r.bars(), 0)
+pub extern "C" fn round_end_beat() -> f64 {
+    with(|r| r.end_beat(), 0.0)
 }
 
 #[unsafe(no_mangle)]
@@ -49,10 +51,10 @@ pub extern "C" fn round_questions() -> u32 {
     with(|r| r.questions.len() as u32, 0)
 }
 
-/// The bar question `q` asks in.
+/// The beat question `q` starts asking on.
 #[unsafe(no_mangle)]
-pub extern "C" fn round_ask_bar(q: u32) -> u32 {
-    with(|r| r.questions.get(q as usize).map_or(0, |q| q.ask), 0)
+pub extern "C" fn round_ask_beat(q: u32) -> f64 {
+    with(|r| r.questions.get(q as usize).map_or(0.0, |q| q.ask), 0.0)
 }
 
 /// How the comp plays question `q` ("Charleston, rootless"), as UTF-8 at [`text_ptr`];
@@ -66,16 +68,26 @@ pub extern "C" fn round_comp(q: u32) -> u32 {
     })
 }
 
+/// The tune's title, as UTF-8 at [`text_ptr`]; returns its length.
+#[unsafe(no_mangle)]
+pub extern "C" fn round_title() -> u32 {
+    let title = with(|r| r.song.title.clone(), String::new());
+    TEXT.with_borrow_mut(|t| {
+        *t = title;
+        t.len() as u32
+    })
+}
+
 /// 1 if question `q` is a free listen (the tune opens with them: the door shown, no score).
 #[unsafe(no_mangle)]
 pub extern "C" fn round_demo(q: u32) -> u32 {
     with(|r| r.questions.get(q as usize).map_or(0, |q| q.demo as u32), 0)
 }
 
-/// The bar question `q`'s door is at.
+/// The beat question `q`'s door is at.
 #[unsafe(no_mangle)]
-pub extern "C" fn round_door_bar(q: u32) -> u32 {
-    with(|r| r.questions.get(q as usize).map_or(0, |q| q.door), 0)
+pub extern "C" fn round_door_beat(q: u32) -> f64 {
+    with(|r| r.questions.get(q as usize).map_or(0.0, |q| q.door), 0.0)
 }
 
 /// What question `q`'s upper (`up` 1) or lower door says, as UTF-8 at [`text_ptr`]; returns

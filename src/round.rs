@@ -30,6 +30,9 @@ pub enum Mode {
     MinorTwoFive { solo: bool },
     /// Which voicing is the pianist using? The doors name two; the comp plays a ii-V-I in one.
     Voicings,
+    /// A real tune: the band plays a chorus of a standard, and a door comes up at its
+    /// dominants: was that a ii-V, or just the V?
+    Tunes,
 }
 
 impl Mode {
@@ -42,6 +45,7 @@ impl Mode {
             5 => Mode::MinorTwoFive { solo: false },
             6 => Mode::MinorTwoFive { solo: true },
             7 => Mode::Voicings,
+            8 => Mode::Tunes,
             _ => Mode::MajorMinor,
         }
     }
@@ -89,6 +93,8 @@ impl Rung {
                 let start = if solo { 132.0 } else { 116.0 };
                 Rung { bpm: (start + 16.0 * n as f32).min(232.0), any_root: n >= 1, inversions: false, bass: !solo, players: n >= 2, step: n }
             }
+            // The tunes are written at 132-192 bpm: start well under, a notch faster each step.
+            Mode::Tunes => Rung { bpm: (104.0 + 12.0 * n as f32).min(192.0), any_root: true, inversions: false, bass: true, players: false, step: n },
             Mode::Voicings => Rung { bpm: (96.0 + 8.0 * n as f32).min(176.0), any_root: n >= 1, inversions: false, bass: true, players: false, step: n },
             Mode::MinorTwoFive { solo } => {
                 let start = if solo { 120.0 } else { 104.0 };
@@ -121,16 +127,16 @@ impl Rung {
 }
 
 /// One question: the answer (up or down) and what was played.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Question {
     /// Up (major; ii-V) or down (minor; just V).
     pub up: bool,
     /// What it was, to show after the door ("D minor", "Em7 A7 | D").
     pub name: String,
-    /// The bar the band starts asking in, and the bar the door is at (0-based; the
-    /// count-in is bar 0).
-    pub ask: u32,
-    pub door: u32,
+    /// The beat the band starts asking on, and the beat the door is at (from the tune's
+    /// start; the count-in is the first bar).
+    pub ask: f64,
+    pub door: f64,
     /// What the upper and lower doors say, when they change per question.
     pub labels: Option<[String; 2]>,
     /// A free listen: the tune opens by playing each answer once, the door shown before you
@@ -144,7 +150,7 @@ impl Question {
     /// A two-bar question (ask, door) numbered `q`, with fixed doors.
     fn two_bar(q: usize, up: bool, name: String) -> Question {
         let ask = COUNT_IN + q as u32 * BARS_PER_QUESTION;
-        Question { up, name, ask, door: ask + 1, labels: None, demo: false, comp: None }
+        Question { up, name, ask: ask as f64 * 4.0, door: (ask + 1) as f64 * 4.0, labels: None, demo: false, comp: None }
     }
 }
 
@@ -204,6 +210,8 @@ pub struct Round {
     pub questions: Vec<Question>,
     pub song: SongFile,
     pub engine: Engine,
+    /// The tune's length in beats when it isn't the questions' (a real tune's chorus).
+    pub length: Option<f64>,
 }
 
 /// No exact repeats back to back, and never three of one answer in a row (no streak to
@@ -221,6 +229,7 @@ impl Round {
             Mode::Turnaround { solo } => Round::turnarounds(seed, rung, solo),
             Mode::MinorTwoFive { solo } => Round::major_minor_two_five(seed, rung, solo),
             Mode::Voicings => Round::voicings(seed, rung),
+            Mode::Tunes => Round::tune(seed, rung),
         }
     }
 
@@ -254,7 +263,7 @@ impl Round {
         let mut engine = Engine::with_config(&song, RATE, config)?;
         engine.post(Input::SetFreedom { lead: 0.0, comp: 0.0, bass: 0.0, drums: 0.15, dynamics: 0.2 });
         let questions = questions.iter().enumerate().map(|(q, t)| Question { demo: q < demos, ..Question::two_bar(q, t.quality == Quality::Major, t.name()) }).collect();
-        Ok(Round { mode: Mode::MajorMinor, rung, questions, song, engine })
+        Ok(Round { mode: Mode::MajorMinor, rung, questions, song, engine, length: None })
     }
 
     /// ii-V-I or V-I, in one key per round (a key of its own each round from the second rung).
@@ -290,7 +299,13 @@ impl Round {
 
     /// Bars in the whole tune (the last door's bar, and one to end on).
     pub fn bars(&self) -> u32 {
-        self.questions.last().map_or(COUNT_IN, |q| q.door) + 2
+        (self.end_beat() / 4.0).ceil() as u32
+    }
+
+    /// Where the tune ends, in beats: a bar past the last door and one to end on (a real
+    /// tune: its chorus).
+    pub fn end_beat(&self) -> f64 {
+        self.length.unwrap_or_else(|| self.questions.last().map_or(COUNT_IN as f64 * 4.0, |q| q.door) + 8.0)
     }
 
     /// Turnarounds: each question two flavors from the step's pool (the newest flavor in
@@ -333,6 +348,42 @@ impl Round {
             })
             .collect();
         changes_round(seed, rung, Mode::Turnaround { solo }, solo, tonic, progs)
+    }
+
+    /// A chorus of a real tune at the step's tempo (never faster than written), with a door
+    /// at each of its dominants: up if its ii came first, down if not. The first of each is a
+    /// free listen.
+    fn tune(seed: u64, rung: Rung) -> Result<Round, String> {
+        use bandstand::chart::{Family, pc_name};
+        let stem = TUNES[(seed % TUNES.len() as u64) as usize];
+        let mut song = bandstand::live::library::load(stem)?;
+        song.bpm = rung.bpm.min(song.bpm);
+        let chart = song.chart.clone().ok_or_else(|| format!("{stem} has no chart"))?;
+        let slots = chart.merged();
+        let name = |c: &bandstand::chart::Chord| format!("{}{}", pc_name(c.root), c.quality.name());
+        let mut questions: Vec<Question> = Vec::new();
+        let (mut seen_up, mut seen_down) = (false, false);
+        for i in 1..slots.len() {
+            let (prev, dom) = (slots[i - 1], slots[i]);
+            if dom.chord.family() != Family::Dominant || dom.chord.quality == bandstand::chart::Quality::Sus4 {
+                continue;
+            }
+            let up = matches!(prev.chord.family(), Family::Minor | Family::HalfDim) && prev.chord.root == (dom.chord.root + 7) % 12;
+            let (ask, door) = (prev.start, dom.end());
+            // Room to see it coming, and a fork's length from the last door.
+            if door < 8.0 || door > chart.beats() - 2.0 || questions.last().is_some_and(|q| door < q.door + 8.0) {
+                continue;
+            }
+            let demo = if up { !std::mem::replace(&mut seen_up, true) } else { !std::mem::replace(&mut seen_down, true) };
+            let what = if up { format!("{} {}", name(&prev.chord), name(&dom.chord)) } else { format!("{} (no ii)", name(&dom.chord)) };
+            questions.push(Question { up, name: what, ask, door, labels: None, demo, comp: None });
+        }
+        let config = EngineConfig { seed, intro: false, soloist: None, ..EngineConfig::on_grid() };
+        let mut engine = Engine::with_config(&song, RATE, config)?;
+        engine.post(Input::SetFreedom { lead: 0.1, comp: 0.1, bass: 0.1, drums: 0.2, dynamics: 0.3 });
+        engine.post(Input::LevelStart);
+        let length = Some(chart.beats());
+        Ok(Round { mode: Mode::Tunes, rung, questions, song, engine, length })
     }
 
     /// Voicings: a ii-V-I (major, or minor from the fourth step) voiced one of two ways named
@@ -402,6 +453,10 @@ impl Round {
         changes_round(seed, rung, Mode::MinorTwoFive { solo }, solo, tonic, progs)
     }
 }
+
+/// The tunes mode plays: the library's tunes that mix ii-Vs and lone Vs (the Dixieland ones
+/// are all lone Vs, Embraceable You all ii-Vs: nothing to tell apart there).
+pub const TUNES: [&str; 5] = ["after_youve_gone", "body_and_soul", "i_got_rhythm", "st_louis_blues", "sunny_side"];
 
 /// The comp's rhythm in a bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -525,7 +580,7 @@ fn changes_round(seed: u64, rung: Rung, mode: Mode, solo: bool, tonic: u8, progs
         drums.push_str("k4 h4 s4 h4 ");
         chart.push_str(&format!("| {} ", token(p.home, tonic)));
         let name = p.chords.iter().map(|c| token(*c, tonic)).collect::<Vec<_>>().join(" ") + " | " + &token(p.home, tonic);
-        questions.push(Question { up: p.up, name, ask: bar, door: bar + bars, labels: p.labels.clone(), demo: p.demo, comp: (!solo).then(|| p.comp.name()) });
+        questions.push(Question { up: p.up, name, ask: bar as f64 * 4.0, door: (bar + bars) as f64 * 4.0, labels: p.labels.clone(), demo: p.demo, comp: (!solo).then(|| p.comp.name()) });
         let _ = q;
         bar += bars + 1;
     }
@@ -550,7 +605,7 @@ fn changes_round(seed: u64, rung: Rung, mode: Mode, solo: bool, tonic: u8, progs
     } else {
         engine.post(Input::SetFreedom { lead: 0.0, comp: 0.0, bass: 0.0, drums: 0.15, dynamics: 0.2 });
     }
-    Ok(Round { mode, rung, questions, song, engine })
+    Ok(Round { mode, rung, questions, song, engine, length: None })
 }
 
 /// MML for one MIDI note (with its octave).
@@ -688,7 +743,7 @@ mod solo_tests {
                 }
             }
             for (q, question) in round.questions.iter().enumerate() {
-                let bar0 = question.ask as f64 * 4.0;
+                let bar0 = question.ask;
                 // Notes in the first half of the asking bar.
                 // The note sounding on beat 1 (started within an 8th before or after it).
                 let at = |b: f64| lead.range(((b - 0.5) * samples_per_beat) as u64..((b + 0.25) * samples_per_beat) as u64).last().map(|(_, &n)| (n as i32 - tonic).rem_euclid(12));
@@ -778,7 +833,7 @@ mod turnaround_tests {
                 let label = &q.labels.as_ref().unwrap()[(!q.up) as usize];
                 let f = FLAVORS.iter().find(|f| &f.label == label).unwrap();
                 for (k, c) in f.chords.iter().enumerate() {
-                    let at = (q.ask as f64 * 4.0 + 2.0 * k as f64) * spb;
+                    let at = (q.ask + 2.0 * k as f64) * spb;
                     let Some((_, &n)) = lead.range((at - 0.5 * spb) as u64..(at + 0.25 * spb) as u64).last() else { continue };
                     let tones = turnaround::voicing(*c, tonic).map(|t| t % 12);
                     total += 1;
@@ -820,7 +875,7 @@ mod minor_tests {
             }
             for q in round.questions.iter().filter(|q| !q.up) {
                 for (k, c) in [Ch(2, Q::HalfDim), Ch(7, Q::Dom7b9), Ch(0, Q::Min6)].iter().enumerate() {
-                    let at = (q.ask as f64 * 4.0 + 2.0 * k as f64) * spb;
+                    let at = (q.ask + 2.0 * k as f64) * spb;
                     let Some((_, &n)) = lead.range((at - 0.5 * spb) as u64..(at + 0.25 * spb) as u64).last() else { continue };
                     let mut tones = turnaround::voicing(*c, tonic).map(|t| t % 12).to_vec();
                     tones.push((tonic + c.0) % 12);
@@ -831,5 +886,23 @@ mod minor_tests {
         }
         eprintln!("minor chord tones at the changes {hit}/{total}");
         assert!(total >= 25 && hit * 10 >= total * 7, "{hit}/{total}");
+    }
+}
+
+#[cfg(test)]
+mod tune_tests {
+    use super::*;
+
+    /// Every tune asks a fair mix: ii-Vs and lone Vs, a free listen of each kind it has.
+    #[test]
+    fn every_tune_asks_both_kinds() {
+        for (i, stem) in TUNES.iter().enumerate() {
+            let round = Round::new(i as u64, Mode::Tunes, Rung::for_mode(Mode::Tunes, 0)).unwrap();
+            let up = round.questions.iter().filter(|q| q.up).count();
+            let down = round.questions.len() - up;
+            eprintln!("{stem}: {} questions, {up} ii-V, {down} V, {} beats at {} bpm", round.questions.len(), round.end_beat(), round.song.bpm);
+            assert!(round.questions.len() >= 4 && up >= 3 && down >= 3, "{stem}");
+            assert!(round.questions.windows(2).all(|w| w[1].door >= w[0].door + 8.0));
+        }
     }
 }

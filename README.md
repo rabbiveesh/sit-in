@@ -24,6 +24,10 @@ the door before your runner reaches it.
 5. **Major or minor ii-V-I (chords / solo)**: Dm7 G7 | Cmaj7 or Dm7b5 G7b9 | Cm6.
 6. **Which voicing?** The doors name two voicings; the comp plays a ii-V-I in one. Close or
    shells, then rootless, then drop 2, with comping rhythms, then minor ii-V-Is too.
+7. **Real tunes: ii-V or just V?** The band plays a chorus of a standard from bandstand's
+   library (After You've Gone, Body and Soul, I Got Rhythm, St. Louis Blues, Sunny Side: the
+   ones that mix the two), melody and all, and a door comes up at each dominant. The first of
+   each kind is a free listen.
 
 In the chords modes the pianist changes how they comp from level 2 on, a rhythm and a
 voicing more each level (held, stabs, Charleston, four to the bar, pushed; close, shells,

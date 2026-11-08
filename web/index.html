@@ -141,6 +141,8 @@ const MODES = [
     rungs: ["The band's lead, key of C", "Any key", "Bird, any key", "Faster", "Up tempo", "Burning"] },
   { title: "Which voicing?", up: "upper door", down: "lower door", labels: true, hideComp: true,
     rungs: ["Close or shells, key of C", "+ rootless, any key", "+ drop 2, comping rhythms", "+ minor ii-V-I", "Faster", "Faster still"] },
+  { title: "Real tunes: ii-V or just V?", up: "ii-V", down: "just V", upIcon: "ii", downIcon: "V", tune: true,
+    rungs: ["Slow", "Easy", "Medium", "Medium up", "Up", "Fast"] },
 ];
 // Per mode: the ladder step, and the band's tempo in percent of the step's (it slows after a
 // rough tune). Remembered in this browser.
@@ -165,9 +167,9 @@ function startRound() {
     const labels = MODES[mode].labels ? [str(x.round_label(q, 1)), str(x.round_label(q, 0))] : null;
     const demo = x.round_demo(q) === 1, major = x.round_answer(q) === 1, comp = str(x.round_comp(q));
     // A free listen walks through the right door by itself.
-    qs.push({ ask: x.round_ask_bar(q) * 4, door: x.round_door_bar(q) * 4, major, name, labels, demo, comp, choice: demo ? major : null, result: null });
+    qs.push({ ask: x.round_ask_beat(q), door: x.round_door_beat(q), major, name, labels, demo, comp, choice: demo ? major : null, result: null });
   }
-  round = { bpm: x.round_bpm(), bars: x.round_bars(), qs, right: 0, total: qs.filter((q) => !q.demo).length };
+  round = { bpm: x.round_bpm(), end: x.round_end_beat(), title: str(x.round_title()), qs, right: 0, total: qs.filter((q) => !q.demo).length };
   nextTime = t0 = ctx.currentTime + 0.12;
   playing = true;
   scene = "playing";
@@ -199,7 +201,7 @@ function update() {
       else { playSfx(1, 0.6); bonk = 1; }
     }
   }
-  if (beat >= round.bars * 4 - 1) {
+  if (beat >= round.end - 1) {
     playing = false;
     scene = "results";
     resultsAt = performance.now();
@@ -217,7 +219,7 @@ function update() {
   }
 }
 let resultsAt = 0;
-const MENU_Y = 96, MENU_H = 31;
+const MENU_Y = 92, MENU_H = 29;
 /** The question whose fork is around `beat` (from a bar before its door to a bar after). */
 const forkAt = (beat) => round && round.qs.find((q) => beat >= q.door - 4 && beat < q.door + 4);
 
@@ -308,7 +310,7 @@ function draw() {
     return;
   }
 
-  const beat = scene === "playing" ? beatNow() : round.bars * 4;
+  const beat = scene === "playing" ? beatNow() : round.end;
   const camX = beat * PPB - W * RUNNER_X;
 
   if (blind && scene === "playing") {
@@ -346,13 +348,15 @@ function draw() {
     }
     // the runner: along the lane chosen for the open question
     const q = scene === "playing" && forkAt(beat);
-    const listening = scene === "playing" && round.qs.some((d) => d.demo && beat < d.door + 2) && beat >= 4;
+    const nq = round.qs.find((d) => beat < d.door + 2);
+    const listening = scene === "playing" && nq && nq.demo && beat >= nq.door - 8;
+    if (MODES[mode].tune) text(round.title, 11, W / 2, 16, "#f4e9d8");
     if (listening) text("FREE LISTEN", 14, W / 2, 60, "#8a7fa3");
     const lane = q && q.choice !== null ? (q.choice ? -1 : 1) : 0;
     const target = pathY(beat, lane);
     ry += (target - ry) * 0.25;
     runner(W * RUNNER_X, ry, beat);
-    if (scene === "playing" && beat < 4) text(["4", "3", "2", "1"][Math.max(0, Math.min(3, Math.floor(beat)))], 28, W / 2, 60, "#8a7fa3");
+    if (scene === "playing" && beat < 4 && !MODES[mode].tune) text(["4", "3", "2", "1"][Math.max(0, Math.min(3, Math.floor(beat)))], 28, W / 2, 60, "#8a7fa3");
     if (flash > 0) { g.fillStyle = `rgba(255,200,69,${flash * 0.25})`; g.fillRect(0, 0, W, H); }
     if (bonk > 0 && q) text("BONK", 14, W * RUNNER_X, ry - 44, "#ff6b6b");
   }
@@ -388,7 +392,7 @@ addEventListener("keydown", (e) => {
   if (e.repeat || !x || document.getElementById("play")) return;
   const k = e.key.toLowerCase();
   if (k === "b") { blind = !blind; return; }
-  if (scene === "title" && "12345678".includes(k)) { mode = +k - 1; startRound(); return; }
+  if (scene === "title" && "123456789".includes(k)) { mode = +k - 1; startRound(); return; }
   if (k === "m" || k === "escape") { playing = false; scene = "title"; return; }
   if (k === "arrowup" || k === "w") answer(true);
   else if (k === "arrowdown" || k === "s") answer(false);
