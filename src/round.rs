@@ -28,6 +28,8 @@ pub enum Mode {
     Turnaround { solo: bool },
     /// Major ii-V-I (up) or minor (down), in the chords or the solo.
     MinorTwoFive { solo: bool },
+    /// Which voicing is the pianist using? The doors name two; the comp plays a ii-V-I in one.
+    Voicings,
 }
 
 impl Mode {
@@ -39,6 +41,7 @@ impl Mode {
             4 => Mode::Turnaround { solo: true },
             5 => Mode::MinorTwoFive { solo: false },
             6 => Mode::MinorTwoFive { solo: true },
+            7 => Mode::Voicings,
             _ => Mode::MajorMinor,
         }
     }
@@ -86,6 +89,7 @@ impl Rung {
                 let start = if solo { 132.0 } else { 116.0 };
                 Rung { bpm: (start + 16.0 * n as f32).min(232.0), any_root: n >= 1, inversions: false, bass: !solo, players: n >= 2, step: n }
             }
+            Mode::Voicings => Rung { bpm: (96.0 + 8.0 * n as f32).min(176.0), any_root: n >= 1, inversions: false, bass: true, players: false, step: n },
             Mode::MinorTwoFive { solo } => {
                 let start = if solo { 120.0 } else { 104.0 };
                 Rung { bpm: (start + 14.0 * n as f32).min(220.0), any_root: n >= 1, inversions: false, bass: !solo || n < 1, players: solo && n >= 2, step: n }
@@ -216,6 +220,7 @@ impl Round {
             Mode::TwoFive { solo } => Round::two_five(seed, rung, solo),
             Mode::Turnaround { solo } => Round::turnarounds(seed, rung, solo),
             Mode::MinorTwoFive { solo } => Round::major_minor_two_five(seed, rung, solo),
+            Mode::Voicings => Round::voicings(seed, rung),
         }
     }
 
@@ -328,6 +333,45 @@ impl Round {
             })
             .collect();
         changes_round(seed, rung, Mode::Turnaround { solo }, solo, tonic, progs)
+    }
+
+    /// Voicings: a ii-V-I (major, or minor from the fourth step) voiced one of two ways named
+    /// on the doors. Close and shells first, then rootless, then drop 2 (`turnaround::Voicing`).
+    fn voicings(seed: u64, rung: Rung) -> Result<Round, String> {
+        use turnaround::{Ch, Q, Voicing};
+        const ALL: [Voicing; 4] = [Voicing::Close, Voicing::Shell, Voicing::Rootless, Voicing::Drop2];
+        let mut dice = Dice(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let tonic = if rung.any_root { dice.below(12) as u8 } else { 0 };
+        let pool = (2 + rung.step as usize).min(ALL.len());
+        let mut picks: Vec<(usize, usize, bool)> = (0..pool).map(|v| (v, if v == 0 { 1 } else { 0 }, true)).collect(); // the free listen
+        let demos = picks.len();
+        while picks.len() < demos + QUESTIONS {
+            let a = if dice.below(2) == 0 { pool - 1 } else { dice.below(pool as u64) as usize };
+            let b = dice.below(pool as u64) as usize;
+            let up = dice.below(2) == 0;
+            let answers: Vec<bool> = picks[demos..].iter().map(|p| p.2).collect();
+            if a == b || !fits(&answers, up) {
+                continue;
+            }
+            picks.push(if dice.below(2) == 0 { (a, b, up) } else { (b, a, up) });
+        }
+        let progs = picks
+            .iter()
+            .enumerate()
+            .map(|(q, &(u, d, up))| {
+                let minor = rung.step >= 3 && dice.below(2) == 0;
+                let rhythm = if rung.step >= 2 { [Rhythm::Hold, Rhythm::Stab, Rhythm::Charleston][dice.below(3) as usize] } else { Rhythm::Hold };
+                Prog {
+                    chords: if minor { vec![Ch(2, Q::HalfDim), Ch(7, Q::Dom7b9)] } else { vec![Ch(2, Q::M7), Ch(7, Q::Dom7)] },
+                    home: if minor { Ch(0, Q::Min6) } else { Ch(0, Q::Maj7) },
+                    up,
+                    labels: Some([ALL[u].name().to_string(), ALL[d].name().to_string()]),
+                    demo: q < demos,
+                    comp: CompStyle { rhythm, voicing: ALL[if up { u } else { d }] },
+                }
+            })
+            .collect();
+        changes_round(seed, rung, Mode::Voicings, false, tonic, progs)
     }
 
     /// Major or minor ii-V-I: Dm7 G7 | Cmaj7 (up) or Dm7b5 G7b9 | Cm6 (down). One key a
@@ -589,7 +633,7 @@ mod tests {
 
     #[test]
     fn every_rung_writes_a_round_that_plays() {
-        for (mode, n) in [0, 1, 2, 3, 4, 5, 6].into_iter().flat_map(|m| (0..6).map(move |n| (Mode::from_index(m), n))) {
+        for (mode, n) in [0, 1, 2, 3, 4, 5, 6, 7].into_iter().flat_map(|m| (0..6).map(move |n| (Mode::from_index(m), n))) {
             let mut round = Round::new(n as u64 + 1, mode, Rung::for_mode(mode, n)).unwrap();
             let real: Vec<&Question> = round.questions.iter().filter(|q| !q.demo).collect();
             assert_eq!(real.len(), QUESTIONS);

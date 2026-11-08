@@ -139,6 +139,8 @@ const MODES = [
     rungs: ["Key of C", "Any key", "Faster", "Faster", "Up tempo", "Burning"] },
   { title: "Major or minor ii-V-I (solo)", up: "MAJOR ii-V-I", down: "MINOR iiø-V7b9-i", upIcon: "☀", downIcon: "☾",
     rungs: ["The band's lead, key of C", "Any key", "Bird, any key", "Faster", "Up tempo", "Burning"] },
+  { title: "Which voicing?", up: "upper door", down: "lower door", labels: true, hideComp: true,
+    rungs: ["Close or shells, key of C", "+ rootless, any key", "+ drop 2, comping rhythms", "+ minor ii-V-I", "Faster", "Faster still"] },
 ];
 // Per mode: the ladder step, and the band's tempo in percent of the step's (it slows after a
 // rough tune). Remembered in this browser.
@@ -215,7 +217,7 @@ function update() {
   }
 }
 let resultsAt = 0;
-const MENU_Y = 100, MENU_H = 34;
+const MENU_Y = 96, MENU_H = 31;
 /** The question whose fork is around `beat` (from a bar before its door to a bar after). */
 const forkAt = (beat) => round && round.qs.find((q) => beat >= q.door - 4 && beat < q.door + 4);
 
@@ -325,7 +327,7 @@ function draw() {
     text(rungName(), 10, W - 10, 34, "#8a7fa3", "right");
     // How the pianist is comping the question coming up (it never gives the answer away).
     const cq = round.qs.find((q) => beat < q.door + 2);
-    if (cq && cq.comp) text("comp: " + cq.comp, 10, W - 10, 50, "#8a7fa3", "right");
+    if (cq && cq.comp && !MODES[mode].hideComp) text("comp: " + cq.comp, 10, W - 10, 50, "#8a7fa3", "right");
     // beat ticks on the floor
     g.fillStyle = "rgba(244,233,216,0.15)";
     for (let b = Math.floor(camX / PPB); b < (camX + W) / PPB; b++) {
@@ -386,7 +388,7 @@ addEventListener("keydown", (e) => {
   if (e.repeat || !x || document.getElementById("play")) return;
   const k = e.key.toLowerCase();
   if (k === "b") { blind = !blind; return; }
-  if (scene === "title" && "1234567".includes(k)) { mode = +k - 1; startRound(); return; }
+  if (scene === "title" && "12345678".includes(k)) { mode = +k - 1; startRound(); return; }
   if (k === "m" || k === "escape") { playing = false; scene = "title"; return; }
   if (k === "arrowup" || k === "w") answer(true);
   else if (k === "arrowdown" || k === "s") answer(false);

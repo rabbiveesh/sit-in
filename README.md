@@ -22,6 +22,8 @@ the door before your runner reaches it.
    plays one. Each level adds a flavor: I vi ii V and I VI7 ii V, then I #i° ii V, iii VI7
    ii V, the tritone sub I VI7 ii bII7, I bIII7 ii bII7, and Tadd Dameron's I bIII bVI bII.
 5. **Major or minor ii-V-I (chords / solo)**: Dm7 G7 | Cmaj7 or Dm7b5 G7b9 | Cm6.
+6. **Which voicing?** The doors name two voicings; the comp plays a ii-V-I in one. Close or
+   shells, then rootless, then drop 2, with comping rhythms, then minor ii-V-Is too.
 
 In the chords modes the pianist changes how they comp from level 2 on, a rhythm and a
 voicing more each level (held, stabs, Charleston, four to the bar, pushed; close, shells,
