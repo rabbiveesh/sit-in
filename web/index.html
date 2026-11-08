@@ -161,9 +161,9 @@ function startRound() {
   for (let q = 0; q < x.round_questions(); q++) {
     const name = str(x.round_name(q));
     const labels = MODES[mode].labels ? [str(x.round_label(q, 1)), str(x.round_label(q, 0))] : null;
-    const demo = x.round_demo(q) === 1, major = x.round_answer(q) === 1;
+    const demo = x.round_demo(q) === 1, major = x.round_answer(q) === 1, comp = str(x.round_comp(q));
     // A free listen walks through the right door by itself.
-    qs.push({ ask: x.round_ask_bar(q) * 4, door: x.round_door_bar(q) * 4, major, name, labels, demo, choice: demo ? major : null, result: null });
+    qs.push({ ask: x.round_ask_bar(q) * 4, door: x.round_door_bar(q) * 4, major, name, labels, demo, comp, choice: demo ? major : null, result: null });
   }
   round = { bpm: x.round_bpm(), bars: x.round_bars(), qs, right: 0, total: qs.filter((q) => !q.demo).length };
   nextTime = t0 = ctx.currentTime + 0.12;
@@ -323,6 +323,9 @@ function draw() {
     text("↓ " + MODES[mode].down, 12, 8, H - 14, "#a98bff", "left");
     text(`${round.right} / ${round.total}`, 14, W - 10, 16, "#ffc845", "right");
     text(rungName(), 10, W - 10, 34, "#8a7fa3", "right");
+    // How the pianist is comping the question coming up (it never gives the answer away).
+    const cq = round.qs.find((q) => beat < q.door + 2);
+    if (cq && cq.comp) text("comp: " + cq.comp, 10, W - 10, 50, "#8a7fa3", "right");
     // beat ticks on the floor
     g.fillStyle = "rgba(244,233,216,0.15)";
     for (let b = Math.floor(camX / PPB); b < (camX + W) / PPB; b++) {

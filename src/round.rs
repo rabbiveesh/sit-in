@@ -132,13 +132,15 @@ pub struct Question {
     /// A free listen: the tune opens by playing each answer once, the door shown before you
     /// reach it, no score.
     pub demo: bool,
+    /// How the comp plays it ("Charleston, rootless"), in the chords modes.
+    pub comp: Option<String>,
 }
 
 impl Question {
     /// A two-bar question (ask, door) numbered `q`, with fixed doors.
     fn two_bar(q: usize, up: bool, name: String) -> Question {
         let ask = COUNT_IN + q as u32 * BARS_PER_QUESTION;
-        Question { up, name, ask, door: ask + 1, labels: None, demo: false }
+        Question { up, name, ask, door: ask + 1, labels: None, demo: false, comp: None }
     }
 }
 
@@ -263,31 +265,22 @@ impl Round {
             }
         }
         // The free listen: a ii-V, then just the V.
-        let demos = 2;
         answers.splice(0..0, [true, false]);
-        let song = write_two_fives(&answers, tonic, rung, solo)?;
-        // The band's own lead outlines the changes (chord tones on nearly every downbeat): the
-        // first two rungs. Then the players, whose lines lean on the chords less plainly (Miles
-        // sits out too many questions for this game).
-        let soloist = if rung.players { [Soloist::Bird, Soloist::Sonny, Soloist::Trane, Soloist::Pops][dice.below(4) as usize] } else { Soloist::Band };
-        let config = EngineConfig { seed, intro: false, soloist: solo.then_some(soloist), ..EngineConfig::on_grid() };
-        let mut engine = Engine::with_config(&song, RATE, config)?;
-        if solo {
-            // The soloist blows over the changes; the comp and bass lay out (a comp under 0.6
-            // never reharmonizes, so the changes stay as written).
-            engine.post(Input::ForceChorus(Some(Call { chorus: Chorus::Blowing, key_up: false })));
-            engine.post(Input::SetFreedom { lead: 0.7, comp: 0.0, bass: 0.0, drums: 0.2, dynamics: 0.4 });
-            engine.post(Input::SetMix([1.0, 0.0, 0.0, 1.0]));
-        } else {
-            engine.post(Input::SetFreedom { lead: 0.0, comp: 0.0, bass: 0.0, drums: 0.15, dynamics: 0.2 });
-        }
-        let names = |up: bool| {
-            let t = (tonic % 12) as usize;
-            let (ii, v, i) = (CHORD_NAMES[(t + 2) % 12], CHORD_NAMES[(t + 7) % 12], CHORD_NAMES[t]);
-            if up { format!("{ii}m7 {v}7 | {i}") } else { format!("{v}7 | {i}") }
-        };
-        let questions = answers.iter().enumerate().map(|(q, &up)| Question { demo: q < demos, ..Question::two_bar(q, up, names(up)) }).collect();
-        Ok(Round { mode: Mode::TwoFive { solo }, rung, questions, song, engine })
+        use turnaround::{Ch, Q};
+        let (ii, v, i) = (Ch(2, Q::M7), Ch(7, Q::Dom7), Ch(0, Q::Maj7));
+        let progs = answers
+            .iter()
+            .enumerate()
+            .map(|(q, &up)| Prog {
+                chords: if up { vec![ii, v] } else { vec![v, v] },
+                home: i,
+                up,
+                labels: None,
+                demo: q < 2,
+                comp: if q < 2 { CompStyle::PLAIN } else { CompStyle::roll(&mut dice, rung.step) },
+            })
+            .collect();
+        changes_round(seed, rung, Mode::TwoFive { solo }, solo, tonic % 12, progs)
     }
 
     /// Bars in the whole tune (the last door's bar, and one to end on).
@@ -331,6 +324,7 @@ impl Round {
                 up,
                 labels: Some([FLAVORS[u].label.to_string(), FLAVORS[d].label.to_string()]),
                 demo: q < demos,
+                comp: if q < demos { CompStyle::PLAIN } else { CompStyle::roll(&mut dice, rung.step.saturating_sub(1)) },
             })
             .collect();
         changes_round(seed, rung, Mode::Turnaround { solo }, solo, tonic, progs)
@@ -358,61 +352,78 @@ impl Round {
                 up,
                 labels: None,
                 demo: q < 2,
+                comp: if q < 2 { CompStyle::PLAIN } else { CompStyle::roll(&mut dice, rung.step) },
             })
             .collect();
         changes_round(seed, rung, Mode::MinorTwoFive { solo }, solo, tonic, progs)
     }
 }
 
-const CHORD_NAMES: [&str; 12] = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+/// The comp's rhythm in a bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rhythm {
+    /// Each chord held.
+    Hold,
+    /// A short stab on each chord.
+    Stab,
+    /// The Charleston: on one and on the "and" of two.
+    Charleston,
+    /// Freddie Green: short chords on every beat.
+    Four,
+    /// Pushed: on the "and" of one and three, off the beat.
+    Push,
+}
 
-/// The ii-V or V into I, two bars a question, in the key of `tonic` (a MIDI note in the
-/// comp's register). With `solo` only the chart and the drums are written: the soloist plays
-/// the changes.
-fn write_two_fives(answers: &[bool], tonic: u8, rung: Rung, solo: bool) -> Result<SongFile, String> {
-    let t = tonic;
-    let name = |pc: u8| CHORD_NAMES[(pc % 12) as usize];
-    let (ii, v, i) = (format!("{}m7", name(t + 2)), format!("{}7", name(t + 7)), format!("{}maj7", name(t)));
-    // Close voicings that lead into each other: ii (D F A C), V (F G B D), I (E G B D).
-    let (vii, vv, vi) = ([t + 2, t + 5, t + 9, t + 12], [t + 5, t + 7, t + 11, t + 14], [t + 4, t + 7, t + 11, t + 14]);
-    // The bass in octave 2 or so.
-    let low = |n: u8| n - 24 - if n % 12 >= 7 && n >= 67 { 12 } else { 0 };
-    let (mut lead, mut comp, mut bass, mut drums) = (String::from("v11 @2 "), String::from("v8 @1 "), String::new(), String::from("v8 "));
-    let mut chart = format!("| {i} ");
-    for p in [&mut lead, &mut comp, &mut bass] {
-        p.push_str("r1 ");
-    }
-    drums.push_str("H4 h4 h4 h4 ");
-    for &up in answers {
-        lead.push_str("r1 r1 ");
-        if solo {
-            comp.push_str("r1 r1 ");
-            bass.push_str("r1 r1 ");
-        } else {
-            if up {
-                comp.push_str(&format!("{} {} ", chord(&vii, "2"), chord(&vv, "2")));
-                bass.push_str(&format!("{}2 {}2 ", note(low(t + 2)), note(low(t + 7))));
-            } else {
-                comp.push_str(&format!("{} {} ", chord(&vv, "2"), chord(&vv, "2")));
-                // Root and fifth: the bass moves in both, so the move alone gives nothing away.
-                bass.push_str(&format!("{}2 {}2 ", note(low(t + 7)), note(low(t + 2))));
-            }
-            comp.push_str(&format!("{} ", chord(&vi, "1")));
-            if rung.bass {
-                bass.push_str(&format!("{}1 ", note(low(t))));
-            } else {
-                bass.push_str("r1 ");
-            }
+impl Rhythm {
+    pub fn name(self) -> &'static str {
+        match self {
+            Rhythm::Hold => "held",
+            Rhythm::Stab => "stabs",
+            Rhythm::Charleston => "Charleston",
+            Rhythm::Four => "four to the bar",
+            Rhythm::Push => "pushed",
         }
-        drums.push_str("k4 h4 s4 h4 k4 h4 s4 h8 h8 ");
-        chart.push_str(&if up { format!("| {ii} {v} | {i} ") } else { format!("| {v} | {i} ") });
     }
-    lead.push_str("r1");
-    comp.push_str(&if solo { "r1".to_string() } else { chord(&vi, "1") });
-    bass.push_str(&if solo { "r1".to_string() } else { format!("{}1", note(low(t))) });
-    drums.push_str("x2 r2");
-    chart.push_str(&format!("| {i} |"));
-    SongFile::from_mml("Sit In: ii-V or V", rung.bpm, 0.5, false, t % 12, &chart, [&lead, &comp, &bass, &drums])
+
+    /// The comp's MML for a bar of one chord or two (each already written as a `{...}` chord
+    /// without its length).
+    fn bar(self, a: &str, b: Option<&str>) -> String {
+        let b = b.unwrap_or(a);
+        match self {
+            Rhythm::Hold if a == b => format!("{a}1"),
+            Rhythm::Hold => format!("{a}2 {b}2"),
+            Rhythm::Stab => format!("{a}4 r4 {b}4 r4"),
+            Rhythm::Charleston => format!("{a}4. {b}8 r2"),
+            Rhythm::Four => format!("{a}8 r8 {a}8 r8 {b}8 r8 {b}8 r8"),
+            Rhythm::Push => format!("r8 {a}8 r4 r8 {b}8 r4"),
+        }
+    }
+}
+
+/// How the comp plays a question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompStyle {
+    pub rhythm: Rhythm,
+    pub voicing: turnaround::Voicing,
+}
+
+impl CompStyle {
+    pub const PLAIN: CompStyle = CompStyle { rhythm: Rhythm::Hold, voicing: turnaround::Voicing::Close };
+
+    /// A style for step `step` of the ladder: the first step plain, then a rhythm and a
+    /// voicing more each step (so the quality has to be heard through the pianist).
+    fn roll(dice: &mut Dice, step: u32) -> CompStyle {
+        use turnaround::Voicing::*;
+        const RHYTHMS: [Rhythm; 5] = [Rhythm::Hold, Rhythm::Stab, Rhythm::Charleston, Rhythm::Four, Rhythm::Push];
+        const VOICINGS: [turnaround::Voicing; 4] = [Close, Shell, Rootless, Drop2];
+        let r = (step as usize + 1).min(RHYTHMS.len());
+        let v = (step as usize + 1).min(VOICINGS.len());
+        CompStyle { rhythm: RHYTHMS[dice.below(r as u64) as usize], voicing: VOICINGS[dice.below(v as u64) as usize] }
+    }
+
+    pub fn name(&self) -> String {
+        format!("{}, {}", self.rhythm.name(), self.voicing.name())
+    }
 }
 
 /// One question of changes: chords two to a bar, then the chord they land on (the door).
@@ -422,25 +433,33 @@ struct Prog {
     up: bool,
     labels: Option<[String; 2]>,
     demo: bool,
+    comp: CompStyle,
 }
 
 /// A round of changes in the key of `tonic` (a pitch class): a count-in, each question's
 /// chords and its landing bar, and a bar to end on. In the chords the comp and bass play them;
 /// in the solo only the chart is written and the soloist plays the changes alone.
 fn changes_round(seed: u64, rung: Rung, mode: Mode, solo: bool, tonic: u8, progs: Vec<Prog>) -> Result<Round, String> {
-    use turnaround::{bass as low, token, voicing};
+    use turnaround::{bass as low, token};
     let (mut lead, mut comp, mut bass, mut drums) = (String::from("v11 @2 r1 "), String::from("v8 @1 r1 "), String::from("r1 "), String::from("v8 H4 h4 h4 h4 "));
     let mut chart = format!("| {} ", token(progs[0].home, tonic));
     let mut questions = Vec::with_capacity(progs.len());
     let mut bar = COUNT_IN;
     for (q, p) in progs.iter().enumerate() {
         let bars = p.chords.len().div_ceil(2) as u32;
+        let v = |c: &turnaround::Ch| chord(&turnaround::voiced(*c, tonic, p.comp.voicing), "");
+        for pair in p.chords.chunks(2) {
+            if solo {
+                comp.push_str("r1 ");
+            } else {
+                comp.push_str(&p.comp.rhythm.bar(&v(&pair[0]), pair.get(1).map(v).as_deref()));
+                comp.push(' ');
+            }
+        }
         for (k, c) in p.chords.iter().enumerate() {
             if solo {
-                comp.push_str("r2 ");
                 bass.push_str("r2 ");
             } else {
-                comp.push_str(&format!("{} ", chord(&voicing(*c, tonic), "2")));
                 bass.push_str(&format!("{}4 {}4 ", note(low(*c, tonic)), note(low(*c, tonic) + 7)));
             }
             chart.push_str(&format!("{}{} ", if k % 2 == 0 { "| " } else { "" }, token(*c, tonic)));
@@ -449,7 +468,8 @@ fn changes_round(seed: u64, rung: Rung, mode: Mode, solo: bool, tonic: u8, progs
             comp.push_str("r1 ");
             bass.push_str("r1 ");
         } else {
-            comp.push_str(&format!("{} ", chord(&voicing(p.home, tonic), "1")));
+            comp.push_str(&p.comp.rhythm.bar(&v(&p.home), None));
+            comp.push(' ');
             bass.push_str(&if rung.bass { format!("{}1 ", note(low(p.home, tonic))) } else { "r1 ".to_string() });
         }
         for _ in 0..bars + 1 {
@@ -461,7 +481,7 @@ fn changes_round(seed: u64, rung: Rung, mode: Mode, solo: bool, tonic: u8, progs
         drums.push_str("k4 h4 s4 h4 ");
         chart.push_str(&format!("| {} ", token(p.home, tonic)));
         let name = p.chords.iter().map(|c| token(*c, tonic)).collect::<Vec<_>>().join(" ") + " | " + &token(p.home, tonic);
-        questions.push(Question { up: p.up, name, ask: bar, door: bar + bars, labels: p.labels.clone(), demo: p.demo });
+        questions.push(Question { up: p.up, name, ask: bar, door: bar + bars, labels: p.labels.clone(), demo: p.demo, comp: (!solo).then(|| p.comp.name()) });
         let _ = q;
         bar += bars + 1;
     }
@@ -471,9 +491,15 @@ fn changes_round(seed: u64, rung: Rung, mode: Mode, solo: bool, tonic: u8, progs
     drums.push_str("x2 r2");
     chart.push_str(&format!("| {} |", token(progs[progs.len() - 1].home, tonic)));
     let song = SongFile::from_mml("Sit In: changes", rung.bpm, 0.5, false, tonic, &chart, [&lead, &comp, &bass, &drums])?;
-    let config = EngineConfig { seed, intro: false, soloist: solo.then_some(if rung.players { Soloist::Bird } else { Soloist::Band }), ..EngineConfig::on_grid() };
+    // The band's own lead outlines the changes (a chord tone on nearly every change) on the
+    // first steps; then the measured players, who lean on the chords less plainly (Miles sits
+    // out too many questions for this game).
+    let soloist = if rung.players { [Soloist::Bird, Soloist::Sonny, Soloist::Trane, Soloist::Pops][(seed % 4) as usize] } else { Soloist::Band };
+    let config = EngineConfig { seed, intro: false, soloist: solo.then_some(soloist), ..EngineConfig::on_grid() };
     let mut engine = Engine::with_config(&song, RATE, config)?;
     if solo {
+        // The soloist blows over the changes; the comp and bass lay out (a comp under 0.6
+        // never reharmonizes, so the changes stay as written).
         engine.post(Input::ForceChorus(Some(Call { chorus: Chorus::Blowing, key_up: false })));
         engine.post(Input::SetFreedom { lead: 0.7, comp: 0.0, bass: 0.0, drums: 0.2, dynamics: 0.4 });
         engine.post(Input::SetMix([1.0, 0.0, 0.0, 1.0]));

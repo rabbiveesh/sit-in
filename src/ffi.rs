@@ -55,6 +55,17 @@ pub extern "C" fn round_ask_bar(q: u32) -> u32 {
     with(|r| r.questions.get(q as usize).map_or(0, |q| q.ask), 0)
 }
 
+/// How the comp plays question `q` ("Charleston, rootless"), as UTF-8 at [`text_ptr`];
+/// returns its length (0 when the comp lays out).
+#[unsafe(no_mangle)]
+pub extern "C" fn round_comp(q: u32) -> u32 {
+    let comp = with(|r| r.questions.get(q as usize).and_then(|q| q.comp.clone()).unwrap_or_default(), String::new());
+    TEXT.with_borrow_mut(|t| {
+        *t = comp;
+        t.len() as u32
+    })
+}
+
 /// 1 if question `q` is a free listen (the tune opens with them: the door shown, no score).
 #[unsafe(no_mangle)]
 pub extern "C" fn round_demo(q: u32) -> u32 {

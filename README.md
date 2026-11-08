@@ -23,6 +23,10 @@ the door before your runner reaches it.
    ii V, the tritone sub I VI7 ii bII7, I bIII7 ii bII7, and Tadd Dameron's I bIII bVI bII.
 5. **Major or minor ii-V-I (chords / solo)**: Dm7 G7 | Cmaj7 or Dm7b5 G7b9 | Cm6.
 
+In the chords modes the pianist changes how they comp from level 2 on, a rhythm and a
+voicing more each level (held, stabs, Charleston, four to the bar, pushed; close, shells,
+rootless, drop 2), so the quality has to be heard through the comping. The HUD names it.
+
 Every tune opens with a free listen: the band plays each answer once, its door shown, no
 score. Eight questions a tune; 7 or 8 right moves you up (after bringing a slowed band back
 to tempo), 4 or fewer slows the band down 15% (to 64%), and only then drops a level. **B** (or
