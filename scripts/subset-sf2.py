@@ -1,6 +1,6 @@
 """Cut a GM .sf2 down to the band: python3 scripts/subset-sf2.py FluidR3_GM.sf2 web/band.sf2 22050
 Keeps the presets named in KEEP, their instruments and samples; drum-kit zones only for KEYS.
-With rate (e.g. 22050), samples above it are resampled down (linear) to shrink the file."""
+With rate (e.g. 22050), samples above it are resampled down (scipy resample_poly); stereo pairs keep the left side only."""
 import struct, sys
 
 KEEP = {(0, 0), (0, 32), (0, 56), (128, 0)}
