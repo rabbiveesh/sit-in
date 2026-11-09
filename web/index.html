@@ -21,12 +21,16 @@
   .play small, .status small { display: block; font-size: 13px; font-weight: normal; color: var(--dim); }
   .play:focus-visible { outline: 3px solid var(--sun); outline-offset: -6px; }
   .status { pointer-events: none; font-size: 15px; }
+  .again { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); padding: 6px 14px; border-radius: 16px;
+    border: 2px solid var(--dim); background: var(--bg); color: var(--ink); font: bold 13px ui-monospace, Menlo, monospace; cursor: pointer; }
+  .again:focus-visible { outline: 3px solid var(--sun); }
 </style>
 </head>
 <body>
 <div class="screen" id="screen">
   <canvas id="c" tabindex="0"></canvas>
   <button class="play" id="play" type="button">SIT IN<small>tap to start · sound on</small></button>
+  <button class="again" id="again" type="button" hidden>↺ again (R)</button>
   <div class="status" id="status" hidden></div>
 </div>
 <script>
@@ -100,6 +104,7 @@ function playSfx(i, gain = 0.8) {
   s.buffer = sfx[i]; v.gain.value = gain;
   s.connect(v).connect(ctx.destination); s.start();
 }
+let sources = []; // the band's buffers scheduled and not done yet (a replay stops them)
 function pump() {
   if (!playing || !ctx) return;
   const rate = x.engine_rate();
@@ -112,6 +117,8 @@ function pump() {
     for (let k = 0; k < CHUNK; k++) { l[k] = a[2 * k]; r[k] = a[2 * k + 1]; }
     const s = ctx.createBufferSource();
     s.buffer = b; s.connect(ctx.destination); s.start(nextTime);
+    sources.push(s);
+    s.onended = () => { const i = sources.indexOf(s); if (i >= 0) sources.splice(i, 1); };
     nextTime += CHUNK / rate;
   }
 }
@@ -159,7 +166,8 @@ let ry = LANE.mid, flash = 0, bonk = 0;
 
 function startRound() {
   audioOn();
-  x.round_new(seed++, mode, rungs[mode], tempo[mode]);
+  roundArgs = [seed++, mode, rungs[mode], tempo[mode]];
+  x.round_new(...roundArgs);
   const qs = [];
   const str = (n) => new TextDecoder().decode(new Uint8Array(x.memory.buffer, x.text_ptr(), n));
   for (let q = 0; q < x.round_questions(); q++) {
@@ -173,6 +181,27 @@ function startRound() {
   nextTime = t0 = ctx.currentTime + 0.12;
   playing = true;
   scene = "playing";
+  pump();
+}
+
+let roundArgs = null;
+/** Hear the open question again: the band rebuilds this round (it's the same every time from
+ *  its seed) and plays from two beats before the question. A right answer after a replay
+ *  counts half. */
+function replay() {
+  if (scene !== "playing") return;
+  const beat = beatNow();
+  const q = openQuestion(beat);
+  if (!q || beat < q.ask) return;
+  const from = Math.max(0, q.ask - 2);
+  x.round_new(...roundArgs);
+  x.round_skip(Math.round(from * 60 / round.bpm * x.engine_rate()));
+  for (const s of sources) { try { s.stop(); } catch (e) {} }
+  sources = [];
+  nextTime = ctx.currentTime + 0.05;
+  t0 = nextTime - from * 60 / round.bpm;
+  q.replays = (q.replays || 0) + 1;
+  q.choice = null;
   pump();
 }
 
@@ -197,7 +226,7 @@ function update() {
     if (q.result === null && beat >= q.door + 0.3) {
       q.result = q.choice === q.major;
       if (q.demo) continue;
-      if (q.result) { round.right++; playSfx(0); flash = 1; }
+      if (q.result) { round.right += q.replays ? 0.5 : 1; playSfx(0); flash = 1; }
       else { playSfx(1, 0.6); bonk = 1; }
     }
   }
@@ -376,7 +405,15 @@ function draw() {
   }
 }
 
-function frame() { update(); draw(); requestAnimationFrame(frame); }
+const againBtn = document.getElementById("again");
+againBtn.addEventListener("click", () => { replay(); canvas.focus(); });
+function frame() {
+  update(); draw();
+  // "Again" shows while a question is open (from its first chord to its door).
+  const open = scene === "playing" && !!openQuestion(beatNow()) && beatNow() >= openQuestion(beatNow()).ask;
+  if (againBtn.hidden === open) againBtn.hidden = !open;
+  requestAnimationFrame(frame);
+}
 ready.then(() => requestAnimationFrame(frame));
 requestAnimationFrame(draw);
 
@@ -393,6 +430,7 @@ addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   if (k === "b") { blind = !blind; return; }
   if (scene === "title" && "123456789".includes(k)) { mode = +k - 1; startRound(); return; }
+  if (k === "r") { replay(); e.preventDefault(); return; }
   if (k === "m" || k === "escape") { playing = false; scene = "title"; return; }
   if (k === "arrowup" || k === "w") answer(true);
   else if (k === "arrowdown" || k === "s") answer(false);

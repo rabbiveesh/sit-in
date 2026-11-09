@@ -138,6 +138,27 @@ pub extern "C" fn round_fill(n: u32) {
     });
 }
 
+/// Skip the round's first `frames` frames, rendered and dropped (to replay from a point: the
+/// page rebuilds the same round, which is deterministic, and skips to just before a question).
+#[unsafe(no_mangle)]
+pub extern "C" fn round_skip(frames: u32) {
+    FRAMES.with_borrow_mut(|buf| {
+        buf.clear();
+        buf.resize(1024, Frame::ZERO);
+        with(
+            |r| {
+                let mut left = frames as usize;
+                while left > 0 {
+                    let n = left.min(buf.len());
+                    r.engine.fill(&mut buf[..n]);
+                    left -= n;
+                }
+            },
+            (),
+        );
+    });
+}
+
 /// Render a sound effect (0 right, 1 wrong, 2 menu) as interleaved stereo at [`audio_ptr`];
 /// returns its length in frames (its rate is [`sfx_rate`]).
 #[unsafe(no_mangle)]

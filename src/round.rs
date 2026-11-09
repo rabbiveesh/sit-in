@@ -906,3 +906,34 @@ mod tune_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod replay_tests {
+    use super::*;
+    use bandstand::Frame;
+
+    /// A round rebuilt from its seed and skipped ahead plays exactly what the first one played
+    /// there (the page's "hear it again" relies on it).
+    #[test]
+    fn a_rebuilt_round_replays_the_same_music() {
+        for mode in [Mode::TwoFive { solo: true }, Mode::Turnaround { solo: false }, Mode::Tunes] {
+            let rung = Rung::for_mode(mode, 2);
+            let mut a = Round::new(42, mode, rung).unwrap();
+            let mut b = Round::new(42, mode, rung).unwrap();
+            let skip = RATE as usize * 6 + 123;
+            let mut first = vec![Frame::ZERO; skip + 4096];
+            a.engine.fill(&mut first);
+            let mut junk = vec![Frame::ZERO; 1000];
+            let mut left = skip;
+            while left > 0 {
+                let n = left.min(junk.len());
+                b.engine.fill(&mut junk[..n]);
+                left -= n;
+            }
+            let mut again = vec![Frame::ZERO; 4096];
+            b.engine.fill(&mut again);
+            let diff = first[skip..].iter().zip(&again).map(|(x, y)| (x.left - y.left).abs()).fold(0.0, f32::max);
+            assert!(diff < 1e-5, "{mode:?}: {diff}");
+        }
+    }
+}
