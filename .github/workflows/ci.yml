@@ -25,6 +25,10 @@ jobs:
   pages:
     if: github.ref == 'refs/heads/main'
     needs: test
+    # One deploy at a time: a second push waits for the first instead of failing.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       pages: write
