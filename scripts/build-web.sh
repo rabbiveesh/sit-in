@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # Build the web game into dist/: index.html + sit_in.wasm, and dist/single.html with the
-# module inlined (one file: for pages that can't serve a second file).
+# module and the SoundFont (gzipped) inlined (one file: for pages that can't serve a second file).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo build --release --target wasm32-unknown-unknown --lib
 target="${CARGO_TARGET_DIR:-target}"
 mkdir -p dist
 cp "$target/wasm32-unknown-unknown/release/sit_in.wasm" dist/
-cp web/index.html dist/index.html
+cp web/index.html web/band.sf2 dist/
 python3 - <<'PY'
-import base64
+import base64, gzip
 b64 = base64.b64encode(open("dist/sit_in.wasm", "rb").read()).decode()
-page = open("web/index.html").read()
+font = base64.b64encode(gzip.compress(open("web/band.sf2", "rb").read(), 9, mtime=0)).decode()
+page = open("web/index.html").read().replace("const FONT_GZ_B64 = null;", f'const FONT_GZ_B64 = "{font}";', 1)
 open("dist/single.html", "w").write(page.replace("const WASM_B64 = null;", f'const WASM_B64 = "{b64}";', 1))
 # The same page as an Artifact body (the viewer adds its own document skeleton).
 import re

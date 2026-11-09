@@ -39,6 +39,10 @@
 // (and the rules: which chord each question asks) live in the wasm (src/ffi.rs).
 const WASM_URL = "sit_in.wasm";
 const WASM_B64 = null; // the single-file build inlines the module here
+// The band's SoundFont (piano, upright bass, trumpet, the kit; cut down from FluidR3_GM, MIT):
+// fetched beside the page, or inlined gzipped by the single-file builds.
+const FONT_URL = "band.sf2";
+const FONT_GZ_B64 = null;
 
 const H = 360;            // virtual height
 const PPB = 64;           // pixels per beat
@@ -82,6 +86,26 @@ async function loadWasm() {
 }
 const ready = loadWasm().catch((e) => { fatal = String(e); showError(e); });
 let fatal = null;
+// The real band loads after the game can start (a round started before it plays the chip).
+let fontState = "loading"; // "loading" | "ready" | "failed"
+async function loadFont() {
+  let bytes;
+  if (FONT_GZ_B64) {
+    const gz = Uint8Array.from(atob(FONT_GZ_B64), (c) => c.charCodeAt(0));
+    bytes = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  } else {
+    const r = await fetch(FONT_URL);
+    if (!r.ok) throw new Error("no " + FONT_URL);
+    bytes = await r.arrayBuffer();
+  }
+  await ready;
+  const ptr = x.font_buffer(bytes.byteLength);
+  new Uint8Array(x.memory.buffer, ptr, bytes.byteLength).set(new Uint8Array(bytes));
+  if (!x.font_load()) throw new Error("bad soundfont");
+  x.font_use(chip ? 0 : 1);
+  fontState = "ready";
+}
+loadFont().catch(() => { fontState = "failed"; });
 
 // ---- audio ----
 let ctx = null, sfx = [], nextTime = 0, t0 = 0, playing = false;
@@ -151,14 +175,23 @@ const MODES = [
   { title: "Real tunes: ii-V or just V?", up: "ii-V", down: "just V", upIcon: "ii", downIcon: "V", tune: true,
     rungs: ["Slow", "Easy", "Medium", "Medium up", "Up", "Fast"] },
 ];
+let chip = false; // play the band on the 8-bit chip instead of the SoundFont
 // Per mode: the ladder step, and the band's tempo in percent of the step's (it slows after a
 // rough tune). Remembered in this browser.
 let rungs = MODES.map(() => 0), tempo = MODES.map(() => 100);
 try {
   const saved = JSON.parse(localStorage.getItem("sit-in") || "null");
   if (saved) MODES.forEach((_, i) => { rungs[i] = (saved.rungs || [])[i] ?? 0; tempo[i] = (saved.tempo || [])[i] ?? 100; });
+  if (saved) chip = !!saved.chip;
 } catch (e) {}
-function save() { try { localStorage.setItem("sit-in", JSON.stringify({ rungs, tempo })); } catch (e) {} }
+function save() { try { localStorage.setItem("sit-in", JSON.stringify({ rungs, tempo, chip })); } catch (e) {} }
+/** Switch the band between the real instruments and the 8-bit chip (from the next tune). */
+function toggleChip() {
+  chip = !chip;
+  if (x && fontState === "ready") x.font_use(chip ? 0 : 1);
+  save();
+}
+const soundName = () => chip ? "band: 8-bit (C)" : fontState === "loading" ? "band: loading…" : fontState === "failed" ? "band: 8-bit only" : "band: real (C)";
 let scene = "title", mode = 0, seed = (Date.now() & 0xffff) + 1, blind = false;
 const rungName = () => MODES[mode].rungs[Math.min(rungs[mode], 5)] + "  ·  " + Math.round(round ? round.bpm : 0) + " bpm";
 let round = null; // {bpm, bars, qs: [{ask, door, major, name, choice, result}]}
@@ -335,7 +368,8 @@ function draw() {
       text((m.labels ? "" : `↑ ${m.up}  ↓ ${m.down}  ·  `) + m.rungs[Math.min(rungs[i], 5)] + slow, 8.5, W / 2, y + 8, "#8a7fa3");
     });
     text("↑ or tap the top half: the upper door.  ↓ or the bottom half: the lower", 9, W / 2, H - 14, "#8a7fa3");
-    text(blind ? "blindfold ON (B / tap here)" : "blindfold off (B / tap here)", 11, W - 8, 14, blind ? "#ffc845" : "#8a7fa3", "right");
+    text(blind ? "blindfold: ON (B)" : "blindfold: off (B)", 11, W - 8, 14, blind ? "#ffc845" : "#8a7fa3", "right");
+    text(soundName(), 11, 8, 14, "#8a7fa3", "left");
     return;
   }
 
@@ -429,6 +463,7 @@ addEventListener("keydown", (e) => {
   if (e.repeat || !x || document.getElementById("play")) return;
   const k = e.key.toLowerCase();
   if (k === "b") { blind = !blind; return; }
+  if (k === "c" && scene === "title") { toggleChip(); return; }
   if (scene === "title" && "123456789".includes(k)) { mode = +k - 1; startRound(); return; }
   if (k === "r") { replay(); e.preventDefault(); return; }
   if (k === "m" || k === "escape") { playing = false; scene = "title"; return; }
@@ -445,6 +480,7 @@ canvas.addEventListener("pointerdown", (e) => {
   const vy = fy * canvas.height / scale - offY; // virtual y
   if (scene === "title") {
     if (fx > 0.6 && vy < 40) { blind = !blind; return; }
+    if (fx < 0.4 && vy < 40) { toggleChip(); return; }
     const i = Math.floor((vy - MENU_Y + MENU_H / 2) / MENU_H);
     if (i >= 0 && i < MODES.length) { mode = i; startRound(); }
     return;

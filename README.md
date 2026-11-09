@@ -42,6 +42,11 @@ to tempo), 4 or fewer slows the band down 15% (to 64%), and only then drops a le
 the corner on the title) puts the blindfold on: the screen goes dark and only the sounds
 tell you how you did.
 
+The band plays real instruments (piano, upright bass, trumpet, a kit) through a General
+MIDI SoundFont, so the chords are easy to hear; **C** (or the top left corner on the title)
+switches it to the 8-bit chip and back. **R** (or AGAIN) replays the open question; a right
+answer after a replay counts half.
+
 ## Play
 
 ```sh
@@ -49,10 +54,11 @@ scripts/build-web.sh           # dist/index.html + dist/sit_in.wasm, and dist/si
 python3 -m http.server -d dist # then open http://localhost:8000
 ```
 
-`dist/single.html` is the whole game in one file (the module inlined), so it also opens
-straight from disk.
+`dist/single.html` is the whole game in one file (the module and the SoundFont, gzipped,
+inlined), so it also opens straight from disk.
 
-Keys: Up/W and Down/S pick a door, 1-3 pick a mode, B blindfold, M menu. Touch: the top
+Keys: Up/W and Down/S pick a door, 1-9 pick a mode, R again, B blindfold, C chip or real
+band, M menu. Touch: the top
 half of the screen is the upper door, the bottom half the lower one.
 
 ## Layout
@@ -64,6 +70,10 @@ half of the screen is the upper door, the bottom half the lower one.
 - `web/index.html` the game: drawing, input, and the audio scheduler (it renders the band in
   1024-frame buffers 0.2 s ahead and plays them back to back at 32 kHz; the runner moves on
   the heard beat: the audio clock minus the output latency).
+
+- `web/band.sf2` the SoundFont: FluidR3_GM (Frank Wen, MIT: `web/band.sf2.LICENSE`) cut down to the four
+  instruments the band plays, mono at 22 kHz (3.8 MB; `scripts/subset-sf2.py`). `cargo run --release --example
+  font_take -- <dir> [mode]` renders a tune through it and the chip, to compare.
 
 `cargo test` checks every mode and level writes a tune that plays, the clock stays on the
 written tempo, and the solo mode's lead outlines the changes.

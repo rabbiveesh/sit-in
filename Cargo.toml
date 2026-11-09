@@ -9,8 +9,9 @@ description = "Sit In: an ear-training game where you play along with a live ban
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The music engine (Nat Han Adventures' band), from crates.io: the core only, no audio backend.
-bandstand = "0.1"
+# The music engine (Nat Han Adventures' band), from crates.io: no audio backend; `soundfont`
+# plays the band through a General MIDI SoundFont (the page loads `web/band.sf2`).
+bandstand = { version = "0.1", features = ["soundfont"] }
 
 [profile.release]
 opt-level = "s"

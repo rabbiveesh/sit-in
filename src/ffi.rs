@@ -5,6 +5,9 @@
 
 use std::cell::RefCell;
 
+use std::cell::Cell;
+
+use bandstand::live::font::FontVoicing;
 use bandstand::{Frame, Sfx};
 
 use crate::round::{Mode, Round, Rung};
@@ -14,6 +17,40 @@ thread_local! {
     static AUDIO: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
     static FRAMES: RefCell<Vec<Frame>> = const { RefCell::new(Vec::new()) };
     static TEXT: RefCell<String> = const { RefCell::new(String::new()) };
+    /// The SoundFont the page loaded, and whether rounds play through it (else the chip).
+    static FONT: RefCell<Option<FontVoicing>> = const { RefCell::new(None) };
+    static FONT_ON: Cell<bool> = const { Cell::new(true) };
+    static FONT_BYTES: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Room for a `.sf2` of `len` bytes: the page writes it at the returned pointer, then calls
+/// [`font_load`].
+#[unsafe(no_mangle)]
+pub extern "C" fn font_buffer(len: u32) -> *mut u8 {
+    FONT_BYTES.with_borrow_mut(|b| {
+        *b = vec![0; len as usize];
+        b.as_mut_ptr()
+    })
+}
+
+/// Parse the SoundFont written at [`font_buffer`]; returns 1 on success. Rounds started after
+/// it play through it (while [`font_use`] is on).
+#[unsafe(no_mangle)]
+pub extern "C" fn font_load() -> u32 {
+    let bytes = FONT_BYTES.take();
+    match FontVoicing::load(&bytes) {
+        Ok(f) => {
+            FONT.set(Some(crate::round::band_voicing(FontVoicing::combo(f))));
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
+/// 1: rounds play through the SoundFont (once loaded), 0: the 8-bit chip.
+#[unsafe(no_mangle)]
+pub extern "C" fn font_use(on: u32) {
+    FONT_ON.set(on != 0);
 }
 
 fn with<T>(f: impl FnOnce(&mut Round) -> T, or: T) -> T {
@@ -27,7 +64,12 @@ fn with<T>(f: impl FnOnce(&mut Round) -> T, or: T) -> T {
 pub extern "C" fn round_new(seed: u32, mode: u32, rung: u32, tempo: u32) -> u32 {
     let mode = Mode::from_index(mode);
     match Round::new(seed as u64, mode, Rung::for_mode(mode, rung).at_tempo(tempo)) {
-        Ok(r) => {
+        Ok(mut r) => {
+            if let (true, Some(v)) = (FONT_ON.get(), FONT.with_borrow(Clone::clone)) {
+                if r.engine.use_font(v).is_err() {
+                    return 0;
+                }
+            }
             ROUND.set(Some(r));
             1
         }

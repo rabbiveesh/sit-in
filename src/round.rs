@@ -1,6 +1,7 @@
 //! A round: a few questions written into one tune for the band.
 
 use bandstand::live::chorus::{Call, Chorus};
+use bandstand::live::font::FontVoicing;
 use bandstand::live::soloist::Soloist;
 use bandstand::live::{Engine, EngineConfig, Input, SongFile};
 
@@ -219,6 +220,12 @@ pub struct Round {
 fn fits(answers: &[bool], up: bool) -> bool {
     let n = answers.len();
     !(n >= 2 && answers[n - 1] == up && answers[n - 2] == up)
+}
+
+/// The band as the SoundFont plays it: trumpet lead, piano comp, upright bass, the kit (a
+/// trumpet in the soli's third voice too: the cut-down font has no saxes).
+pub fn band_voicing(combo: FontVoicing) -> FontVoicing {
+    FontVoicing { programs: [Some(56), Some(0), Some(32), Some(0), Some(56)], ..combo }
 }
 
 impl Round {
@@ -934,6 +941,25 @@ mod replay_tests {
             b.engine.fill(&mut again);
             let diff = first[skip..].iter().zip(&again).map(|(x, y)| (x.left - y.left).abs()).fold(0.0, f32::max);
             assert!(diff < 1e-5, "{mode:?}: {diff}");
+        }
+    }
+
+    /// Every mode plays through the page's cut-down SoundFont (`web/band.sf2`): it has the
+    /// band's four instruments, sounds, stays in range and keeps the same clock.
+    #[test]
+    fn the_band_plays_through_the_soundfont() {
+        let font = FontVoicing::load(include_bytes!("../web/band.sf2")).unwrap();
+        for m in 0..9 {
+            let mode = Mode::from_index(m);
+            let mut round = Round::new(5, mode, Rung::for_mode(mode, 3)).unwrap();
+            round.engine.use_font(band_voicing(FontVoicing::combo(font.clone()))).unwrap();
+            let mut out = vec![Frame::ZERO; RATE as usize * 8];
+            round.engine.fill(&mut out);
+            let rms = (out.iter().map(|f| (f.left as f64).powi(2)).sum::<f64>() / out.len() as f64).sqrt();
+            assert!(rms > 0.01, "{mode:?} is silent: {rms}");
+            assert!(out.iter().all(|f| f.left.is_finite() && f.left.abs() <= 1.0), "{mode:?} clips");
+            let beat = round.engine.beat_clock().position.song_beat;
+            assert!((beat - 8.0 * round.song.bpm as f64 / 60.0).abs() < 0.01);
         }
     }
 }
